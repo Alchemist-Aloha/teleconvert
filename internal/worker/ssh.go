@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -68,49 +69,74 @@ func (s *SSHWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error)
 }
 
 func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath string) (string, error) {
-	client, sftpClient, err := s.connectSFTP(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-	defer sftpClient.Close()
-
 	remotePart := remoteFinalPath + ".part"
-	if err := sftpClient.MkdirAll(filepath.ToSlash(filepath.Dir(remotePart))); err != nil {
+	// Ensure remote directory exists
+	if err := s.EnsureDir(ctx, filepath.Dir(remoteFinalPath)); err != nil {
 		return "", err
 	}
 
-	in, err := os.Open(localPath)
-	if err != nil {
-		return "", err
+	addr := s.node.Address
+	if !strings.Contains(addr, ":") {
+		addr += ":22"
 	}
-	defer in.Close()
-
-	out, err := sftpClient.Create(filepath.ToSlash(remotePart))
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
-
-	stat, err := in.Stat()
-	if err == nil {
-		s.vlog("uploading %s (%d bytes)", localPath, stat.Size())
+	host, port, _ := net.SplitHostPort(addr)
+	if port == "" {
+		port = "22"
 	}
 
-	pw := &progressWriter{
-		total: stat.Size(),
-		vlog:  s.vlog,
+	// Use rsync for high-speed transfer
+	rsyncCmd := []string{
+		"rsync", "-avz",
+		"-e", fmt.Sprintf("ssh -i %s -p %s -o StrictHostKeyChecking=no", s.node.SSHKey, port),
+		localPath,
+		fmt.Sprintf("%s@%s:%s", s.node.User, host, remotePart),
 	}
-	if _, err := io.Copy(out, io.TeeReader(in, pw)); err != nil {
-		return "", err
+
+	if s.vlog != nil {
+		s.vlog("running rsync: %s", strings.Join(rsyncCmd, " "))
 	}
-	if err := out.Close(); err != nil {
-		return "", err
+
+	cmd := exec.CommandContext(ctx, rsyncCmd[0], rsyncCmd[1:]...)
+	if s.vlog != nil {
+		cmd.Stdout = &prefixWriter{prefix: "[rsync] ", out: os.Stderr}
+		cmd.Stderr = &prefixWriter{prefix: "[rsync-err] ", out: os.Stderr}
 	}
-	if err := sftpClient.Rename(filepath.ToSlash(remotePart), filepath.ToSlash(remoteFinalPath)); err != nil {
-		return "", err
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("rsync upload failed: %w", err)
 	}
+
+	// Rename part to final on remote
+	if _, err := s.run(ctx, fmt.Sprintf("mv %s %s", shellQuote(remotePart), shellQuote(remoteFinalPath))); err != nil {
+		return "", fmt.Errorf("remote rename failed: %w", err)
+	}
+
 	return remotePart, nil
+}
+
+type prefixWriter struct {
+	prefix string
+	out    io.Writer
+	buf    []byte
+}
+
+func (p *prefixWriter) Write(b []byte) (int, error) {
+	p.buf = append(p.buf, b...)
+	for {
+		idx := strings.IndexByte(string(p.buf), '\n')
+		if idx == -1 {
+			break
+		}
+		line := p.buf[:idx+1]
+		if _, err := fmt.Fprint(p.out, p.prefix); err != nil {
+			return 0, err
+		}
+		if _, err := p.out.Write(line); err != nil {
+			return 0, err
+		}
+		p.buf = p.buf[idx+1:]
+	}
+	return len(b), nil
 }
 
 type progressWriter struct {
@@ -122,7 +148,7 @@ type progressWriter struct {
 
 func (p *progressWriter) Write(b []byte) (int, error) {
 	p.current += int64(len(b))
-	if time.Since(p.lastLog) > 5*time.Second {
+	if p.vlog != nil && time.Since(p.lastLog) > 5*time.Second {
 		pct := float64(0)
 		if p.total > 0 {
 			pct = float64(p.current) / float64(p.total) * 100
@@ -150,6 +176,9 @@ func (s *SSHWorker) StartCommand(ctx context.Context, command, pidFile, exitFile
 		shellQuote(stderrLog),
 		shellQuote(pidFile),
 	)
+	if s.vlog != nil {
+		s.vlog("wrapped command: %s", wrapped)
+	}
 	if _, err := s.run(ctx, wrapped); err != nil {
 		return 0, err
 	}
@@ -207,32 +236,37 @@ func (s *SSHWorker) FileExistsNonZero(ctx context.Context, path string) (bool, e
 }
 
 func (s *SSHWorker) Download(ctx context.Context, remotePath, localPath string) error {
-	client, sftpClient, err := s.connectSFTP(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	defer sftpClient.Close()
-
-	in, err := sftpClient.Open(filepath.ToSlash(remotePath))
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return err
 	}
-	out, err := os.Create(localPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	addr := s.node.Address
+	if !strings.Contains(addr, ":") {
+		addr += ":22"
 	}
-	return out.Sync()
+	host, port, _ := net.SplitHostPort(addr)
+	if port == "" {
+		port = "22"
+	}
+
+	rsyncCmd := []string{
+		"rsync", "-avz",
+		"-e", fmt.Sprintf("ssh -i %s -p %s -o StrictHostKeyChecking=no", s.node.SSHKey, port),
+		fmt.Sprintf("%s@%s:%s", s.node.User, host, remotePath),
+		localPath,
+	}
+
+	if s.vlog != nil {
+		s.vlog("running rsync: %s", strings.Join(rsyncCmd, " "))
+	}
+
+	cmd := exec.CommandContext(ctx, rsyncCmd[0], rsyncCmd[1:]...)
+	if s.vlog != nil {
+		cmd.Stdout = &prefixWriter{prefix: "[rsync] ", out: os.Stderr}
+		cmd.Stderr = &prefixWriter{prefix: "[rsync-err] ", out: os.Stderr}
+	}
+
+	return cmd.Run()
 }
 
 func (s *SSHWorker) Remove(ctx context.Context, paths ...string) error {
@@ -324,7 +358,9 @@ func (s *SSHWorker) connectSFTP(ctx context.Context) (*ssh.Client, *sftp.Client,
 }
 
 func (s *SSHWorker) run(ctx context.Context, command string) (string, error) {
-	s.vlog("executing remote command: %s", command)
+	if s.vlog != nil {
+		s.vlog("executing remote command: %s", command)
+	}
 	client, err := s.connect(ctx)
 	if err != nil {
 		return "", err

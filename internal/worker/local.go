@@ -96,7 +96,9 @@ func (l *LocalWorker) StartCommand(ctx context.Context, command, pidFile, exitFi
 	if err := os.MkdirAll(filepath.Dir(stderrLog), 0o755); err != nil {
 		return 0, err
 	}
-	l.vlog("executing local command: %s", command)
+	if l.vlog != nil {
+		l.vlog("executing local command: %s", command)
+	}
 	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),

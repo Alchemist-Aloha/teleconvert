@@ -12,7 +12,7 @@ import (
 
 func TestLocalWorkerHeartbeat(t *testing.T) {
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := w.Heartbeat(ctx); err != nil {
@@ -24,7 +24,7 @@ func TestLocalWorkerEnsureDir(t *testing.T) {
 	tmpdir := t.TempDir()
 	testdir := filepath.Join(tmpdir, "a", "b", "c")
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	if err := w.EnsureDir(ctx, testdir); err != nil {
@@ -46,7 +46,7 @@ func TestLocalWorkerUploadAtomic(t *testing.T) {
 	}
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	part, err := w.UploadAtomic(ctx, srcFile, dstFile)
@@ -74,7 +74,7 @@ func TestLocalWorkerMD5(t *testing.T) {
 	}
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	hash1, err := w.MD5(ctx, testFile)
@@ -103,7 +103,7 @@ func TestLocalWorkerFileExistsNonZero(t *testing.T) {
 	os.WriteFile(nonEmptyFile, []byte("content"), 0o644)
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	empty, _ := w.FileExistsNonZero(ctx, emptyFile)
@@ -133,7 +133,7 @@ func TestLocalWorkerDownload(t *testing.T) {
 	}
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	if err := w.Download(ctx, srcFile, dstFile); err != nil {
@@ -157,7 +157,7 @@ func TestLocalWorkerRemove(t *testing.T) {
 	os.WriteFile(file2, []byte("content"), 0o644)
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	if err := w.Remove(ctx, file1, file2); err != nil {
@@ -174,7 +174,7 @@ func TestLocalWorkerRemove(t *testing.T) {
 
 func TestLocalWorkerRemoveNonExistent(t *testing.T) {
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	if err := w.Remove(ctx, "/nonexistent/file.txt"); err != nil {
@@ -192,7 +192,7 @@ func TestLocalWorkerStartCommand(t *testing.T) {
 	stderrLog := filepath.Join(tmpdir, "test.stderr.log")
 
 	node := config.Node{Name: "local", Address: "localhost", TmpDir: tmpdir}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -222,7 +222,7 @@ func TestLocalWorkerIsProcessRunning(t *testing.T) {
 	stderrLog := filepath.Join(tmpdir, "test.stderr.log")
 
 	node := config.Node{Name: "local", Address: "localhost", TmpDir: tmpdir}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -255,7 +255,7 @@ func TestLocalWorkerIsProcessRunning(t *testing.T) {
 
 func TestLocalWorkerInvalidPID(t *testing.T) {
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	running, _ := w.IsProcessRunning(ctx, -1)
@@ -274,7 +274,7 @@ func TestLocalWorkerPIDFileParsing(t *testing.T) {
 	pidFile := filepath.Join(tmpdir, "test.pid")
 
 	node := config.Node{Name: "local", Address: "localhost"}
-	w := NewLocal(node)
+	w := NewLocal(node, nil)
 	ctx := context.Background()
 
 	pid, err := w.ReadPID(ctx, pidFile)
