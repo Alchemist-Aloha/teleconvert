@@ -382,18 +382,25 @@ func fileMD5(path string) (string, error) {
 
 type prefixWriter struct {
 	prefix string
-	out    *os.File
+	out    io.Writer
+	buf    []byte
 }
 
 func (p *prefixWriter) Write(b []byte) (int, error) {
-	lines := strings.Split(string(b), "\n")
-	for i, line := range lines {
-		if line == "" && i == len(lines)-1 {
-			continue
+	p.buf = append(p.buf, b...)
+	for {
+		idx := strings.IndexByte(string(p.buf), '\n')
+		if idx == -1 {
+			break
 		}
-		if _, err := p.out.WriteString(p.prefix + line + "\n"); err != nil {
+		line := p.buf[:idx+1]
+		if _, err := fmt.Fprint(p.out, p.prefix); err != nil {
 			return 0, err
 		}
+		if _, err := p.out.Write(line); err != nil {
+			return 0, err
+		}
+		p.buf = p.buf[idx+1:]
 	}
 	return len(b), nil
 }
