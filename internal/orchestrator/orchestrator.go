@@ -194,12 +194,15 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	remoteInput := filepath.ToSlash(filepath.Join(node.TmpDir, jobID+".input"))
 	remoteOutput := filepath.ToSlash(filepath.Join(node.TmpDir, jobID+".output"))
 
+	o.vlog("uploading %s to %s:%s", job.InputPath, node.Name, remoteInput)
 	part, err := w.UploadAtomic(ctx, job.InputPath, remoteInput)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "upload failed: "+err.Error())
 		return err
 	}
+	o.vlog("upload done for %s", job.InputPath)
 
+	o.vlog("verifying md5 for %s", job.InputPath)
 	localMD5, err := fileMD5(job.InputPath)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "local md5 failed: "+err.Error())
@@ -217,6 +220,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		_ = w.Remove(ctx, part, remoteInput)
 		return fmt.Errorf("md5 mismatch for %s", job.InputPath)
 	}
+	o.vlog("md5 match for %s (%s)", job.InputPath, localMD5)
 
 	cmd, err := renderCommand(node.Command, remoteInput, remoteOutput)
 	if err != nil {
@@ -225,12 +229,14 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 
+	o.vlog("starting remote command on %s: %s", node.Name, cmd)
 	pid, err := w.StartCommand(ctx, cmd, sl.pidFile, sl.exitFile, sl.stderrLog)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "start command failed: "+err.Error())
 		_ = w.Remove(ctx, part, remoteInput)
 		return err
 	}
+	o.vlog("remote command started on %s with pid %d", node.Name, pid)
 
 	activeMu.Lock()
 	active[job.InputPath] = activeProc{job: job, sl: sl, pid: pid, part: part}
@@ -269,6 +275,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	}
 
 	localTmp := job.OutputPath + ".tmp"
+	o.vlog("downloading %s:%s to %s", node.Name, remoteOutput, job.OutputPath)
 	if err := w.Download(ctx, remoteOutput, localTmp); err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "download failed: "+err.Error())
 		return err
@@ -277,6 +284,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "finalize output failed: "+err.Error())
 		return err
 	}
+	o.vlog("download done for %s", job.OutputPath)
 
 	if err := w.Remove(ctx, part, remoteInput, remoteOutput, sl.pidFile, sl.exitFile, sl.stderrLog); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: cleanup failed on %s: %v\n", node.Name, err)
@@ -303,13 +311,22 @@ func (o *Orchestrator) cleanKill(ctx context.Context, ld *ledger.Ledger, activeM
 	}
 }
 
+func (o *Orchestrator) vlog(format string, args ...any) {
+	if o.opts.Verbose {
+		fmt.Printf("[verbose] "+format+"\n", args...)
+	}
+}
+
 func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]slot, error) {
 	all := make([]slot, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
+		o.vlog("checking node %s (%s)", n.Name, n.Address)
 		var w worker.Worker
 		if config.IsLocalAddress(n.Address) {
+			o.vlog("node %s is local", n.Name)
 			w = worker.NewLocal(n)
 		} else {
+			o.vlog("node %s is remote", n.Name)
 			if n.User == "" {
 				fmt.Fprintf(os.Stderr, "skip node %s: user is required for ssh node\n", n.Name)
 				continue
@@ -325,11 +342,13 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 			fmt.Fprintf(os.Stderr, "skip node %s: heartbeat failed: %v\n", n.Name, err)
 			continue
 		}
+		o.vlog("node %s heartbeat ok", n.Name)
 
 		for i := 0; i < n.MaxConcurrent; i++ {
 			pidFile := filepath.ToSlash(filepath.Join(n.TmpDir, fmt.Sprintf("teleconvert.%d.pid", i)))
 			exitFile := filepath.ToSlash(filepath.Join(n.TmpDir, fmt.Sprintf("teleconvert.%d.exit", i)))
 			stderrLog := filepath.ToSlash(filepath.Join(n.TmpDir, fmt.Sprintf("teleconvert.%d.stderr.log", i)))
+			o.vlog("node %s slot %d: checking pid file %s", n.Name, i, pidFile)
 			pid, err := w.ReadPID(ctx, pidFile)
 			if err == nil && pid > 0 {
 				running, runErr := w.IsProcessRunning(ctx, pid)
@@ -338,6 +357,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 					continue
 				}
 			}
+			o.vlog("node %s slot %d is free", n.Name, i)
 			all = append(all, slot{
 				name:      fmt.Sprintf("%s#%d", n.Name, i),
 				w:         w,
