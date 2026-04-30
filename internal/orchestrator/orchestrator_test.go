@@ -1,0 +1,255 @@
+package orchestrator
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"text/template"
+
+	"teleconvert/internal/config"
+)
+
+func TestRenderCommand(t *testing.T) {
+	tests := []struct {
+		tpl    string
+		input  string
+		output string
+		want   string
+	}{
+		{
+			"ffmpeg -i {{.Input}} -o {{.Output}}",
+			"/input/video.mp4",
+			"/output/video.mp4",
+			"ffmpeg -i /input/video.mp4 -o /output/video.mp4",
+		},
+		{
+			"HandBrakeCLI -i {{.Input}} -o {{.Output}} --preset 'High Profile'",
+			"/input/video.mp4",
+			"/output/video.mp4",
+			"HandBrakeCLI -i /input/video.mp4 -o /output/video.mp4 --preset 'High Profile'",
+		},
+	}
+
+	for _, tt := range tests {
+		got, err := renderCommand(tt.tpl, tt.input, tt.output)
+		if err != nil {
+			t.Fatalf("render command: %v", err)
+		}
+		if got != tt.want {
+			t.Errorf("renderCommand got %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestRenderCommandInvalidTemplate(t *testing.T) {
+	_, err := renderCommand("{{.Invalid}}", "/input", "/output")
+	if err == nil {
+		t.Error("expected error for invalid template syntax")
+	}
+}
+
+func TestJobIDFromPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/path/to/video.mp4", "_path_to_video.mp4"},
+		{"C:\\path\\to\\video.mp4", "C__path_to_video.mp4"},
+		{"/path:with:colons", "_path_with_colons"},
+	}
+
+	for _, tt := range tests {
+		got := jobIDFromPath(tt.path)
+		if got != tt.want {
+			t.Errorf("jobIDFromPath(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestPrefixWriter(t *testing.T) {
+	tmpdir := t.TempDir()
+	logFile := filepath.Join(tmpdir, "test.log")
+	f, err := os.Create(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	pw := &prefixWriter{prefix: "[worker1] ", out: f}
+	n, err := pw.Write([]byte("line 1\nline 2\n"))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if n != 14 {
+		t.Errorf("expected write count 14, got %d", n)
+	}
+
+	f.Close()
+	b, _ := os.ReadFile(logFile)
+	content := string(b)
+	if !strings.Contains(content, "[worker1]") {
+		t.Errorf("prefix not found in output: %q", content)
+	}
+	if !strings.Contains(content, "line 1") {
+		t.Errorf("line 1 not found in output: %q", content)
+	}
+}
+
+func TestPrefixWriterEmptyLines(t *testing.T) {
+	tmpdir := t.TempDir()
+	logFile := filepath.Join(tmpdir, "test.log")
+	f, err := os.Create(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	pw := &prefixWriter{prefix: "[w] ", out: f}
+	pw.Write([]byte("line 1\n\n"))
+	f.Close()
+
+	b, _ := os.ReadFile(logFile)
+	content := string(b)
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) != 2 {
+		t.Errorf("expected 2 lines with content, got %d: %q", len(lines), content)
+	}
+}
+
+func TestTemplateExecutionEdgeCases(t *testing.T) {
+	tests := []struct {
+		tpl    string
+		input  string
+		output string
+		valid  bool
+	}{
+		{"{{.Input}} {{.Output}}", "/in", "/out", true},
+		{"{{.Input}}", "/in", "/out", true},
+		{"{{.Output}}", "/in", "/out", true},
+		{"{{.Invalid}}", "/in", "/out", false},
+		{"{{.Input | upper}}", "/in", "/out", false},
+	}
+
+	for _, tt := range tests {
+		_, err := renderCommand(tt.tpl, tt.input, tt.output)
+		if tt.valid && err != nil {
+			t.Errorf("expected valid template %q, got error: %v", tt.tpl, err)
+		}
+		if !tt.valid && err == nil {
+			t.Errorf("expected invalid template %q to error", tt.tpl)
+		}
+	}
+}
+
+func TestConfigNodeValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		node config.Node
+		want error
+	}{
+		{
+			"valid command",
+			config.Node{
+				Name:    "test",
+				Address: "localhost",
+				Command: "ffmpeg -i {{.Input}} {{.Output}}",
+			},
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		cfg := &config.Config{Nodes: []config.Node{tt.node}}
+		err := cfg.Validate()
+		if tt.want == nil && err != nil {
+			t.Errorf("test %s: expected no error, got %v", tt.name, err)
+		}
+	}
+}
+
+func TestWorkerNodeConstruction(t *testing.T) {
+	node := config.Node{
+		Name:          "worker1",
+		Address:       "192.168.1.1:22",
+		User:          "testuser",
+		SSHKey:        "~/.ssh/id_rsa",
+		MaxConcurrent: 2,
+		Command:       "ffmpeg -i {{.Input}} {{.Output}}",
+		TmpDir:        "/tmp/teleconvert",
+	}
+
+	if node.Name != "worker1" {
+		t.Errorf("node name mismatch")
+	}
+	if node.MaxConcurrent != 2 {
+		t.Errorf("max concurrent mismatch")
+	}
+}
+
+func TestTemplateDataStructure(t *testing.T) {
+	data := struct {
+		Input  string
+		Output string
+	}{
+		Input:  "/input/file.mp4",
+		Output: "/output/file.mp4",
+	}
+
+	tpl := template.Must(template.New("test").Parse("{{.Input}} -> {{.Output}}"))
+	var buf strings.Builder
+	tpl.Execute(&buf, data)
+
+	expected := "/input/file.mp4 -> /output/file.mp4"
+	if buf.String() != expected {
+		t.Errorf("template execution failed: got %q, want %q", buf.String(), expected)
+	}
+}
+
+func TestJobIDFromPathSpecialChars(t *testing.T) {
+	tests := []struct {
+		input string
+	}{
+		{"/path/with spaces/video.mp4"},
+		{"/path/with-dashes/video.mp4"},
+		{"/path/with_underscores/video.mp4"},
+		{"/path/with.dots/video.mp4"},
+	}
+
+	for _, tt := range tests {
+		id := jobIDFromPath(tt.input)
+		if id == "" {
+			t.Errorf("jobIDFromPath(%q) returned empty string", tt.input)
+		}
+		if strings.Contains(id, "/") {
+			t.Errorf("jobIDFromPath should remove forward slashes, got %q", id)
+		}
+	}
+}
+
+func TestOptionsDefaults(t *testing.T) {
+	opts := Options{
+		InputPath: "/path/to/input",
+	}
+
+	if opts.OutputExt != "" && opts.OutputExt != ".mp4" {
+		t.Errorf("output ext should default or be empty")
+	}
+	if opts.PollInterval != 0 && opts.PollInterval.Seconds() != 2 {
+		t.Errorf("poll interval should default to 2s")
+	}
+}
+
+func TestOrchestratorNew(t *testing.T) {
+	opts := Options{
+		InputPath:    "/path/to/input",
+		PollInterval: 0,
+	}
+
+	orch := New(opts)
+	if orch.opts.PollInterval.Seconds() != 2 {
+		t.Errorf("expected poll interval default to 2s, got %v", orch.opts.PollInterval)
+	}
+}
+
+
