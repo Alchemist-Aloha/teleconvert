@@ -251,5 +251,3 @@ func TestOrchestratorNew(t *testing.T) {
 		t.Errorf("expected poll interval default to 2s, got %v", orch.opts.PollInterval)
 	}
 }
-
-

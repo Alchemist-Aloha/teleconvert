@@ -1,14 +1,14 @@
 nodes:
-  - name: "workstation-01"
-    address: "192.168.88.230:22"
-    user: "kent"
-    ssh_key: "~/.ssh/id_rsa"
-    max_concurrent: 1
-    command: "ffmpeg -i {{.Input}} -c:v libx265 -crf 22 {{.Output}}"
-    tmp_dir: "/tmp/teleconvert"
+- name: "workstation-01"
+  address: "192.168.88.10:22"
+  user: "user"
+  ssh_key: "~/.ssh/id_rsa"
+  max_concurrent: 1
+  command: "ffmpeg -i {{.Input}} -c:v libx265 -crf 22 {{.Output}}"
+  tmp_dir: "/tmp/teleconvert"
 
-  - name: "home-server"
-    address: "localhost"
-    max_concurrent: 1
-    command: "HandBrakeCLI -i {{.Input}} -o {{.Output}} --preset 'High Profile'"
-    tmp_dir: "/tmp/teleconvert"
+- name: "local-encoder"
+  address: "localhost"
+  max_concurrent: 2
+  command: "ffmpeg -i {{.Input}} -c:v libx264 -preset fast {{.Output}}"
+  tmp_dir: "~/.tmp/teleconvert"

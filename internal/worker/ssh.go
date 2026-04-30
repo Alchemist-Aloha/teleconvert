@@ -13,9 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"teleconvert/internal/config"
+
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	"teleconvert/internal/config"
 )
 
 type SSHWorker struct {
@@ -106,7 +107,7 @@ func (s *SSHWorker) MD5(ctx context.Context, path string) (string, error) {
 }
 
 func (s *SSHWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
-	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -lc %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
+	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),
 		shellQuote(command+"; ec=$?; echo $ec > "+shellQuote(exitFile)+"; exit $ec"),
@@ -303,7 +304,7 @@ func (s *SSHWorker) run(ctx context.Context, command string) (string, error) {
 	sess.Stdout = &b
 	sess.Stderr = &b
 
-	if err := sess.Start("sh -lc " + shellQuote(command)); err != nil {
+	if err := sess.Start("sh -c " + shellQuote(command)); err != nil {
 		return "", err
 	}
 	done := make(chan error, 1)

@@ -30,8 +30,9 @@ func (l *LocalWorker) Node() config.Node {
 }
 
 func (l *LocalWorker) Heartbeat(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", "ls /tmp >/dev/null")
-	return cmd.Run()
+	// Simple test: check if /tmp is accessible
+	_, err := os.Stat("/tmp")
+	return err
 }
 
 func (l *LocalWorker) EnsureDir(ctx context.Context, dir string) error {
@@ -89,14 +90,14 @@ func (l *LocalWorker) StartCommand(ctx context.Context, command, pidFile, exitFi
 	if err := os.MkdirAll(filepath.Dir(stderrLog), 0o755); err != nil {
 		return 0, err
 	}
-	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -lc %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
+	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),
 		shellQuote(command+"; ec=$?; echo $ec > "+shellQuote(exitFile)+"; exit $ec"),
 		shellQuote(stderrLog),
 		shellQuote(pidFile),
 	)
-	cmd := exec.CommandContext(ctx, "sh", "-lc", wrapped)
+	cmd := exec.CommandContext(ctx, "sh", "-c", wrapped)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return 0, fmt.Errorf("start local command: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
