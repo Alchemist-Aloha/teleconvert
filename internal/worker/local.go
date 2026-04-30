@@ -19,10 +19,11 @@ import (
 
 type LocalWorker struct {
 	node config.Node
+	vlog func(string, ...any)
 }
 
-func NewLocal(node config.Node) *LocalWorker {
-	return &LocalWorker{node: node}
+func NewLocal(node config.Node, vlog func(string, ...any)) *LocalWorker {
+	return &LocalWorker{node: node, vlog: vlog}
 }
 
 func (l *LocalWorker) Node() config.Node {
@@ -95,6 +96,7 @@ func (l *LocalWorker) StartCommand(ctx context.Context, command, pidFile, exitFi
 	if err := os.MkdirAll(filepath.Dir(stderrLog), 0o755); err != nil {
 		return 0, err
 	}
+	l.vlog("executing local command: %s", command)
 	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),

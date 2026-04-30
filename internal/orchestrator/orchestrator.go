@@ -324,7 +324,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 		var w worker.Worker
 		if config.IsLocalAddress(n.Address) {
 			o.vlog("node %s is local", n.Name)
-			w = worker.NewLocal(n)
+			w = worker.NewLocal(n, o.vlog)
 		} else {
 			o.vlog("node %s is remote", n.Name)
 			if n.User == "" {
@@ -335,7 +335,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 				fmt.Fprintf(os.Stderr, "skip node %s: ssh_key is required for ssh node\n", n.Name)
 				continue
 			}
-			w = worker.NewSSH(n)
+			w = worker.NewSSH(n, o.vlog)
 		}
 
 		if err := w.Heartbeat(ctx); err != nil {

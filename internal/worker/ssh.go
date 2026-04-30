@@ -21,10 +21,11 @@ import (
 
 type SSHWorker struct {
 	node config.Node
+	vlog func(string, ...any)
 }
 
-func NewSSH(node config.Node) *SSHWorker {
-	return &SSHWorker{node: node}
+func NewSSH(node config.Node, vlog func(string, ...any)) *SSHWorker {
+	return &SSHWorker{node: node, vlog: vlog}
 }
 
 func (s *SSHWorker) Node() config.Node {
@@ -89,8 +90,18 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+	defer out.Close()
+
+	stat, err := in.Stat()
+	if err == nil {
+		s.vlog("uploading %s (%d bytes)", localPath, stat.Size())
+	}
+
+	pw := &progressWriter{
+		total: stat.Size(),
+		vlog:  s.vlog,
+	}
+	if _, err := io.Copy(out, io.TeeReader(in, pw)); err != nil {
 		return "", err
 	}
 	if err := out.Close(); err != nil {
@@ -100,6 +111,26 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 		return "", err
 	}
 	return remotePart, nil
+}
+
+type progressWriter struct {
+	total   int64
+	current int64
+	vlog    func(string, ...any)
+	lastLog time.Time
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	p.current += int64(len(b))
+	if time.Since(p.lastLog) > 5*time.Second {
+		pct := float64(0)
+		if p.total > 0 {
+			pct = float64(p.current) / float64(p.total) * 100
+		}
+		p.vlog("progress: %.1f%% (%d/%d bytes)", pct, p.current, p.total)
+		p.lastLog = time.Now()
+	}
+	return len(b), nil
 }
 
 func (s *SSHWorker) MD5(ctx context.Context, path string) (string, error) {
@@ -293,6 +324,7 @@ func (s *SSHWorker) connectSFTP(ctx context.Context) (*ssh.Client, *sftp.Client,
 }
 
 func (s *SSHWorker) run(ctx context.Context, command string) (string, error) {
+	s.vlog("executing remote command: %s", command)
 	client, err := s.connect(ctx)
 	if err != nil {
 		return "", err
