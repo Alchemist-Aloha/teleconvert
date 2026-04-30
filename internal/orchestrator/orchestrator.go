@@ -31,6 +31,7 @@ type Options struct {
 	DeleteSource  bool
 	PollInterval  time.Duration
 	ContinueOnErr bool
+	Verbose       bool
 }
 
 type Orchestrator struct {
