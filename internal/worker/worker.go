@@ -11,6 +11,7 @@ import (
 type Worker interface {
 	Node() config.Node
 	Heartbeat(ctx context.Context) error
+	CheckCommand(ctx context.Context, cmd string) error
 	EnsureDir(ctx context.Context, dir string) error
 	ReadPID(ctx context.Context, pidFile string) (int, error)
 	IsProcessRunning(ctx context.Context, pid int) (bool, error)

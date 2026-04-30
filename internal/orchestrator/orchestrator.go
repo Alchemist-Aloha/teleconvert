@@ -344,6 +344,13 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 		}
 		o.vlog("node %s heartbeat ok", n.Name)
 
+		cmdName := strings.Fields(n.Command)[0]
+		if err := w.CheckCommand(ctx, cmdName); err != nil {
+			fmt.Fprintf(os.Stderr, "skip node %s: command %q not found: %v\n", n.Name, cmdName, err)
+			continue
+		}
+		o.vlog("node %s command %q found", n.Name, cmdName)
+
 		for i := 0; i < n.MaxConcurrent; i++ {
 			pidFile := filepath.ToSlash(filepath.Join(n.TmpDir, fmt.Sprintf("teleconvert.%d.pid", i)))
 			exitFile := filepath.ToSlash(filepath.Join(n.TmpDir, fmt.Sprintf("teleconvert.%d.exit", i)))

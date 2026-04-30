@@ -35,6 +35,11 @@ func (l *LocalWorker) Heartbeat(ctx context.Context) error {
 	return err
 }
 
+func (l *LocalWorker) CheckCommand(ctx context.Context, cmd string) error {
+	_, err := exec.LookPath(cmd)
+	return err
+}
+
 func (l *LocalWorker) EnsureDir(ctx context.Context, dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }

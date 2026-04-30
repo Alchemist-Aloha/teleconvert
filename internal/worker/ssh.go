@@ -36,6 +36,11 @@ func (s *SSHWorker) Heartbeat(ctx context.Context) error {
 	return err
 }
 
+func (s *SSHWorker) CheckCommand(ctx context.Context, cmd string) error {
+	_, err := s.run(ctx, "which "+shellQuote(cmd))
+	return err
+}
+
 func (s *SSHWorker) EnsureDir(ctx context.Context, dir string) error {
 	_, err := s.run(ctx, "mkdir -p "+shellQuote(dir))
 	return err
