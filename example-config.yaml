@@ -5,13 +5,12 @@ nodes:
   user: "user"
   ssh_key: "/home/user/.ssh/id_rsa"
   max_concurrent: 1
-
-#   Placeholders: {{.Input}} and {{.Output}}
+  #  Placeholders: {{.Input}} and {{.Output}}
   command: "HandBrakeCLI -i {{.Input}} -o {{.Output}} -e x265 -q 27.0 -a 1 -E fdk_aac -B 160 -6 stereo -f mkv --deinterlace -w 1920 -l 1080 -O"
   tmp_dir: "/tmp/teleconvert"
 
-# - name: "local-encoder"
-#   address: "localhost"
-#   max_concurrent: 1
-#   command: "HandBrakeCLI -i {{.Input}} -o {{.Output}} -e x265 -q 27.0 -a 1 -E fdk_aac -B 160 -6 stereo -f mkv --deinterlace -w 1920 -l 1080 -O"
-#   tmp_dir: "/tmp/teleconvert"
+- name: "local-encoder"
+  address: "localhost"
+  max_concurrent: 1
+  command: "HandBrakeCLI -i {{.Input}} -o {{.Output}} -e x265 -q 27.0 -a 1 -E fdk_aac -B 160 -6 stereo -f mkv --deinterlace -w 1920 -l 1080 -O"
+  tmp_dir: "/tmp/teleconvert"
