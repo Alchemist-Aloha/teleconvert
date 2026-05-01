@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,8 @@ import (
 	"teleconvert/internal/discovery"
 	"teleconvert/internal/ledger"
 	"teleconvert/internal/worker"
+
+	"github.com/pterm/pterm"
 )
 
 func TestRenderCommand(t *testing.T) {
@@ -52,6 +56,77 @@ func TestRenderCommandInvalidTemplate(t *testing.T) {
 	_, err := renderCommand("{{.Invalid}}", "/input", "/output")
 	if err == nil {
 		t.Error("expected error for invalid template syntax")
+	}
+}
+
+func TestOrchestratorSlotStress(t *testing.T) {
+	tmpdir := t.TempDir()
+	
+	// Create some input files
+	inputDir := filepath.Join(tmpdir, "input")
+	os.MkdirAll(inputDir, 0755)
+	for i := 0; i < 100; i++ {
+		os.WriteFile(filepath.Join(inputDir, fmt.Sprintf("file%d.mp4", i)), []byte("data"), 0644)
+	}
+
+	configPath := filepath.Join(tmpdir, "config.yaml")
+	content := `nodes:
+  - name: "worker1"
+    address: "localhost"
+    command: "ffmpeg -i {{.Input}} {{.Output}}"
+    max_concurrent: 2
+    tmp_dir: "/tmp"
+`
+	os.WriteFile(configPath, []byte(content), 0644)
+
+	mw := &mockWorker{
+		node: config.Node{Name: "worker1", MaxConcurrent: 2, TmpDir: "/tmp"},
+		md5Func: func(ctx context.Context, path string) (string, error) {
+			return fileMD5(path)
+		},
+	}
+
+	o := New(Options{
+		ConfigPath:    configPath,
+		InputPath:     inputDir,
+		OutputDir:     filepath.Join(tmpdir, "output"),
+		PollInterval:  10 * time.Millisecond,
+		ContinueOnErr: true,
+		Verbose:       true,
+	})
+	pterm.EnableDebugMessages()
+	o.workerFactory = func(node config.Node, vlog func(string, ...any)) worker.Worker {
+		return mw
+	}
+
+	// We need to mock signal notify to avoid hanging
+	o.sigNotify = func(c chan<- os.Signal, sig ...os.Signal) {}
+
+	err := o.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Wait a bit for filesystem to catch up
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify all jobs are done in ledger
+	ld, _ := ledger.New(inputDir)
+	snap := ld.Snapshot()
+	t.Logf("Discovered %d jobs in ledger", len(snap.Jobs))
+	if len(snap.Jobs) != 100 {
+		t.Errorf("expected 100 jobs in ledger, got %d", len(snap.Jobs))
+	}
+	for path, entry := range snap.Jobs {
+		if entry.Status != ledger.StatusDone {
+			t.Errorf("job %s expected done, got %s (Error: %q)", path, entry.Status, entry.LastError)
+		}
+	}
+
+	if t.Failed() {
+		statusPath := filepath.Join(inputDir, ".teleconvert_status.json")
+		b, _ := os.ReadFile(statusPath)
+		t.Logf("Raw Ledger file: %s", string(b))
 	}
 }
 
@@ -270,8 +345,20 @@ func (m *mockWorker) Node() config.Node { return m.node }
 func (m *mockWorker) Heartbeat(ctx context.Context) error { return nil }
 func (m *mockWorker) CheckCommand(ctx context.Context, cmd string) error { return nil }
 func (m *mockWorker) EnsureDir(ctx context.Context, dir string) error { return nil }
-func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error) { return 0, nil }
+func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error) { return 1, nil }
 func (m *mockWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error) { return false, nil }
+func (m *mockWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
+	return 1, nil
+}
+func (m *mockWorker) WaitForExit(ctx context.Context, pid int, exitFile, stderrLog string, pollInterval time.Duration, stderrSink io.Writer) (int, error) {
+	return 0, nil
+}
+func (m *mockWorker) FileExistsNonZero(ctx context.Context, path string) (bool, error) {
+	return true, nil
+}
+func (m *mockWorker) Download(ctx context.Context, remote, local string) error {
+	return os.WriteFile(local, []byte("output"), 0644)
+}
 func (m *mockWorker) Remove(ctx context.Context, paths ...string) error { return nil }
 func (m *mockWorker) SignalTERM(ctx context.Context, pid int) error {
 	if m.signalCalled != nil {
@@ -282,6 +369,13 @@ func (m *mockWorker) SignalTERM(ctx context.Context, pid int) error {
 func (m *mockWorker) UploadAtomic(ctx context.Context, local, remote string) (string, error) {
 	if m.uploadFunc != nil {
 		return m.uploadFunc(ctx, local, remote)
+	}
+	data, err := os.ReadFile(local)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(remote, data, 0644); err != nil {
+		return "", err
 	}
 	return remote + ".part", nil
 }
