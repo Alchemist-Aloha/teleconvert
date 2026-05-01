@@ -1,5 +1,5 @@
 # Binaries
-teleconvert
+/teleconvert
 *.exe
 *.exe~
 *.dll
@@ -14,5 +14,4 @@ go.work.sum
 
 # Project Specific
 test-config.yaml
-docs/CONFIG_VALIDATION.md
-docs/HANDBRAKE_CONVERSION.md
+docs/design
