@@ -274,7 +274,9 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 
-	prefixed := &prefixWriter{prefix: "[" + node.Name + "] ", out: os.Stderr}
+	color := getColorForNode(node.Name)
+	prefix := pterm.Color(color).Sprint(" " + node.Name + " ")
+	prefixed := &prefixWriter{prefix: "[" + prefix + "] ", out: os.Stderr}
 	exitCode, err := w.WaitForExit(ctx, pid, sl.exitFile, sl.stderrLog, o.opts.PollInterval, prefixed)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "wait failed: "+err.Error())
@@ -332,6 +334,23 @@ func (o *Orchestrator) cleanKill(ctx context.Context, ld *ledger.Ledger, activeM
 		_ = p.sl.w.Remove(ctx, p.part, p.sl.pidFile)
 		_ = ld.Set(p.job.InputPath, ledger.StatusPending, "", "interrupted")
 	}
+}
+
+var nodeColors = []pterm.Color{
+	pterm.FgCyan,
+	pterm.FgMagenta,
+	pterm.FgBlue,
+	pterm.FgYellow,
+	pterm.FgGreen,
+	pterm.FgRed,
+}
+
+func getColorForNode(name string) pterm.Color {
+	sum := 0
+	for _, r := range name {
+		sum += int(r)
+	}
+	return nodeColors[sum%len(nodeColors)]
 }
 
 func (o *Orchestrator) vlog(format string, args ...any) {
