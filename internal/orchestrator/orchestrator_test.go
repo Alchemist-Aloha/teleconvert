@@ -262,6 +262,8 @@ type mockWorker struct {
 	worker.Worker
 	node         config.Node
 	signalCalled chan int
+	md5Func      func(ctx context.Context, path string) (string, error)
+	uploadFunc   func(ctx context.Context, local, remote string) (string, error)
 }
 
 func (m *mockWorker) Node() config.Node { return m.node }
@@ -272,8 +274,59 @@ func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error) {
 func (m *mockWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error) { return false, nil }
 func (m *mockWorker) Remove(ctx context.Context, paths ...string) error { return nil }
 func (m *mockWorker) SignalTERM(ctx context.Context, pid int) error {
-	m.signalCalled <- pid
+	if m.signalCalled != nil {
+		m.signalCalled <- pid
+	}
 	return nil
+}
+func (m *mockWorker) UploadAtomic(ctx context.Context, local, remote string) (string, error) {
+	if m.uploadFunc != nil {
+		return m.uploadFunc(ctx, local, remote)
+	}
+	return remote + ".part", nil
+}
+func (m *mockWorker) MD5(ctx context.Context, path string) (string, error) {
+	if m.md5Func != nil {
+		return m.md5Func(ctx, path)
+	}
+	return "", nil
+}
+
+func TestOrchestratorMD5Mismatch(t *testing.T) {
+	tmpdir := t.TempDir()
+	inputPath := filepath.Join(tmpdir, "test.mp4")
+	os.WriteFile(inputPath, []byte("video data"), 0644)
+
+	mw := &mockWorker{
+		node: config.Node{Name: "worker1", TmpDir: "/tmp"},
+		md5Func: func(ctx context.Context, path string) (string, error) {
+			return "wrong-md5", nil
+		},
+	}
+
+	o := New(Options{})
+	o.workerFactory = func(node config.Node, vlog func(string, ...any)) worker.Worker {
+		return mw
+	}
+
+	ld, _ := ledger.New(tmpdir)
+	job := discovery.Job{InputPath: inputPath, OutputPath: inputPath + ".out"}
+
+	active := make(map[string]activeProc)
+	var activeMu sync.Mutex
+
+	err := o.executeJob(context.Background(), job, slot{w: mw, node: mw.node}, ld, &activeMu, active)
+	if err == nil {
+		t.Fatal("expected error for MD5 mismatch")
+	}
+	if !strings.Contains(err.Error(), "md5 mismatch") {
+		t.Errorf("expected error to contain 'md5 mismatch', got %v", err)
+	}
+
+	entry, _ := ld.Get(inputPath)
+	if !strings.Contains(entry.LastError, "md5 mismatch") {
+		t.Errorf("expected ledger to record md5 mismatch, got %q", entry.LastError)
+	}
 }
 
 func TestOrchestratorInterrupt(t *testing.T) {
