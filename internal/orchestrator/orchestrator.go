@@ -21,6 +21,8 @@ import (
 	"teleconvert/internal/discovery"
 	"teleconvert/internal/ledger"
 	"teleconvert/internal/worker"
+
+	"github.com/pterm/pterm"
 )
 
 type Options struct {
@@ -74,21 +76,29 @@ func New(opts Options) *Orchestrator {
 }
 
 func (o *Orchestrator) Run(ctx context.Context) error {
+	if o.opts.Verbose {
+		pterm.EnableDebugMessages()
+	}
+
 	cfg, err := config.Load(o.opts.ConfigPath)
 	if err != nil {
 		return err
 	}
 
+	spinner, _ := pterm.DefaultSpinner.Start("Discovering jobs...")
 	jobs, ledgerRoot, err := discovery.Discover(o.opts.InputPath, o.opts.OutputDir, o.opts.OutputExt)
 	if err != nil {
+		spinner.Fail(err.Error())
 		return err
 	}
 	if len(jobs) == 0 {
+		spinner.Fail("no video files discovered")
 		return errors.New("no video files discovered")
 	}
 
 	ld, err := ledger.New(ledgerRoot)
 	if err != nil {
+		spinner.Fail(err.Error())
 		return err
 	}
 	jobPaths := make([]string, 0, len(jobs))
@@ -96,8 +106,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		jobPaths = append(jobPaths, j.InputPath)
 	}
 	if err := ld.InitJobs(jobPaths); err != nil {
+		spinner.Fail(err.Error())
 		return err
 	}
+	spinner.Success(fmt.Sprintf("Discovered %d total jobs", len(jobs)))
 
 	slots, err := o.buildSlots(ctx, cfg)
 	if err != nil {
@@ -116,11 +128,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		pending = append(pending, j)
 	}
 	if len(pending) == 0 {
-		fmt.Println("all jobs already marked done in ledger")
+		pterm.Info.Println("all jobs already marked done in ledger")
 		return nil
 	}
 
-	fmt.Printf("discovered %d total jobs, %d pending\n", len(jobs), len(pending))
+	pterm.Info.Printf("discovered %d total jobs, %d pending\n", len(jobs), len(pending))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -149,20 +161,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		select {
 		case sig := <-sigCh:
-			fmt.Printf("received signal %s, performing clean shutdown...\n", sig)
+			pterm.Warning.Printf("received signal %s, performing clean shutdown...\n", sig)
 			cancel()
 			o.cleanKill(context.Background(), ld, &activeMu, active)
 		case res := <-results:
 			inFlight--
 			freeSlots = append(freeSlots, res.slot)
 			if res.err != nil {
-				fmt.Printf("job failed: %s (%v)\n", res.job.InputPath, res.err)
+				pterm.Error.Printf("job failed: %s (%v)\n", res.job.InputPath, res.err)
 				if !o.opts.ContinueOnErr {
 					cancel()
 					o.cleanKill(context.Background(), ld, &activeMu, active)
 				}
 			} else {
-				fmt.Printf("job done: %s -> %s\n", res.job.InputPath, res.job.OutputPath)
+				pterm.Success.Printf("job done: %s -> %s\n", res.job.InputPath, res.job.OutputPath)
 			}
 		case <-time.After(250 * time.Millisecond):
 		}
@@ -323,9 +335,7 @@ func (o *Orchestrator) cleanKill(ctx context.Context, ld *ledger.Ledger, activeM
 }
 
 func (o *Orchestrator) vlog(format string, args ...any) {
-	if o.opts.Verbose {
-		fmt.Printf("[verbose] "+format+"\n", args...)
-	}
+	pterm.Debug.Printf(format, args...)
 }
 
 func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]slot, error) {
