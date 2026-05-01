@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestLedgerMalformedJSON(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, ".teleconvert_status.json")
+	if err := os.WriteFile(path, []byte("{invalid json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := New(tmp)
+	if err == nil {
+		t.Error("expected error for malformed ledger JSON")
+	}
+}
+
 func TestLedgerCreate(t *testing.T) {
 	tmpdir := t.TempDir()
 	ld, err := New(tmpdir)
