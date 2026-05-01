@@ -1,4 +1,18 @@
+# Binaries
+teleconvert
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go Artifacts
+*.test
+*.out
+go.work
+go.work.sum
+
+# Project Specific
 test-config.yaml
 docs/CONFIG_VALIDATION.md
 docs/HANDBRAKE_CONVERSION.md
-teleconvert
