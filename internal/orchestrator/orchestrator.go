@@ -420,7 +420,12 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 }
 
 func renderCommand(tpl, input, output string) (string, error) {
-	t, err := template.New("command").Parse(tpl)
+	funcMap := template.FuncMap{
+		"quote": func(s string) string {
+			return fmt.Sprintf("%q", s)
+		},
+	}
+	t, err := template.New("command").Funcs(funcMap).Parse(tpl)
 	if err != nil {
 		return "", err
 	}
@@ -429,8 +434,8 @@ func renderCommand(tpl, input, output string) (string, error) {
 		Input  string
 		Output string
 	}{
-		Input:  input,
-		Output: output,
+		Input:  fmt.Sprintf("%q", input),
+		Output: fmt.Sprintf("%q", output),
 	}
 	if err := t.Execute(&b, data); err != nil {
 		return "", err

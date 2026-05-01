@@ -27,13 +27,13 @@ func TestRenderCommand(t *testing.T) {
 			"ffmpeg -i {{.Input}} -o {{.Output}}",
 			"/input/video.mp4",
 			"/output/video.mp4",
-			"ffmpeg -i /input/video.mp4 -o /output/video.mp4",
+			"ffmpeg -i \"/input/video.mp4\" -o \"/output/video.mp4\"",
 		},
 		{
 			"HandBrakeCLI -i {{.Input}} -o {{.Output}} --preset 'High Profile'",
 			"/input/video.mp4",
 			"/output/video.mp4",
-			"HandBrakeCLI -i /input/video.mp4 -o /output/video.mp4 --preset 'High Profile'",
+			"HandBrakeCLI -i \"/input/video.mp4\" -o \"/output/video.mp4\" --preset 'High Profile'",
 		},
 	}
 
