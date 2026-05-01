@@ -35,7 +35,9 @@ type Options struct {
 }
 
 type Orchestrator struct {
-	opts Options
+	opts          Options
+	workerFactory func(config.Node, func(string, ...any)) worker.Worker
+	sigNotify     func(chan<- os.Signal, ...os.Signal)
 }
 
 type slot struct {
@@ -59,7 +61,16 @@ func New(opts Options) *Orchestrator {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 2 * time.Second
 	}
-	return &Orchestrator{opts: opts}
+	return &Orchestrator{
+		opts: opts,
+		workerFactory: func(node config.Node, vlog func(string, ...any)) worker.Worker {
+			if config.IsLocalAddress(node.Address) {
+				return worker.NewLocal(node, vlog)
+			}
+			return worker.NewSSH(node, vlog)
+		},
+		sigNotify: signal.Notify,
+	}
 }
 
 func (o *Orchestrator) Run(ctx context.Context) error {
@@ -114,7 +125,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	o.sigNotify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
 	active := make(map[string]activeProc)
@@ -324,7 +335,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 		var w worker.Worker
 		if config.IsLocalAddress(n.Address) {
 			o.vlog("node %s is local", n.Name)
-			w = worker.NewLocal(n, o.vlog)
+			w = o.workerFactory(n, o.vlog)
 		} else {
 			o.vlog("node %s is remote", n.Name)
 			if n.User == "" {
@@ -335,7 +346,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 				fmt.Fprintf(os.Stderr, "skip node %s: ssh_key is required for ssh node\n", n.Name)
 				continue
 			}
-			w = worker.NewSSH(n, o.vlog)
+			w = o.workerFactory(n, o.vlog)
 		}
 
 		if err := w.Heartbeat(ctx); err != nil {

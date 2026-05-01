@@ -1,13 +1,19 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"text/template"
+	"time"
 
 	"teleconvert/internal/config"
+	"teleconvert/internal/discovery"
+	"teleconvert/internal/ledger"
+	"teleconvert/internal/worker"
 )
 
 func TestRenderCommand(t *testing.T) {
@@ -249,5 +255,62 @@ func TestOrchestratorNew(t *testing.T) {
 	orch := New(opts)
 	if orch.opts.PollInterval.Seconds() != 2 {
 		t.Errorf("expected poll interval default to 2s, got %v", orch.opts.PollInterval)
+	}
+}
+
+type mockWorker struct {
+	worker.Worker
+	node         config.Node
+	signalCalled chan int
+}
+
+func (m *mockWorker) Node() config.Node { return m.node }
+func (m *mockWorker) Heartbeat(ctx context.Context) error { return nil }
+func (m *mockWorker) CheckCommand(ctx context.Context, cmd string) error { return nil }
+func (m *mockWorker) EnsureDir(ctx context.Context, dir string) error { return nil }
+func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error) { return 0, nil }
+func (m *mockWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error) { return false, nil }
+func (m *mockWorker) Remove(ctx context.Context, paths ...string) error { return nil }
+func (m *mockWorker) SignalTERM(ctx context.Context, pid int) error {
+	m.signalCalled <- pid
+	return nil
+}
+
+func TestOrchestratorInterrupt(t *testing.T) {
+	active := make(map[string]activeProc)
+	var activeMu sync.Mutex
+	sigCalled := make(chan int, 1)
+	mw := &mockWorker{
+		node:         config.Node{Name: "mockNode"},
+		signalCalled: sigCalled,
+	}
+
+	active["test.mp4"] = activeProc{
+		job: discovery.Job{InputPath: "test.mp4"},
+		sl:  slot{w: mw},
+		pid: 1234,
+	}
+
+	o := New(Options{})
+	tmp := t.TempDir()
+	ld, _ := ledger.New(tmp)
+
+	o.cleanKill(context.Background(), ld, &activeMu, active)
+
+	select {
+	case pid := <-sigCalled:
+		if pid != 1234 {
+			t.Errorf("expected signal to pid 1234, got %d", pid)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for SignalTERM")
+	}
+
+	entry, ok := ld.Get("test.mp4")
+	if !ok {
+		t.Fatal("ledger entry not found")
+	}
+	if entry.Status != ledger.StatusPending || !strings.Contains(entry.LastError, "interrupted") {
+		t.Errorf("expected status pending with interrupted message, got %s: %s", entry.Status, entry.LastError)
 	}
 }

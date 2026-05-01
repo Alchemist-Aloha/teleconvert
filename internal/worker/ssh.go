@@ -21,12 +21,15 @@ import (
 )
 
 type SSHWorker struct {
-	node config.Node
-	vlog func(string, ...any)
+	node   config.Node
+	vlog   func(string, ...any)
+	runner func(ctx context.Context, command string) (string, error)
 }
 
 func NewSSH(node config.Node, vlog func(string, ...any)) *SSHWorker {
-	return &SSHWorker{node: node, vlog: vlog}
+	s := &SSHWorker{node: node, vlog: vlog}
+	s.runner = s.run
+	return s
 }
 
 func (s *SSHWorker) Node() config.Node {
@@ -34,22 +37,22 @@ func (s *SSHWorker) Node() config.Node {
 }
 
 func (s *SSHWorker) Heartbeat(ctx context.Context) error {
-	_, err := s.run(ctx, "ls /tmp >/dev/null")
+	_, err := s.runner(ctx, "ls /tmp >/dev/null")
 	return err
 }
 
 func (s *SSHWorker) CheckCommand(ctx context.Context, cmd string) error {
-	_, err := s.run(ctx, "which "+shellQuote(cmd))
+	_, err := s.runner(ctx, "which "+shellQuote(cmd))
 	return err
 }
 
 func (s *SSHWorker) EnsureDir(ctx context.Context, dir string) error {
-	_, err := s.run(ctx, "mkdir -p "+shellQuote(dir))
+	_, err := s.runner(ctx, "mkdir -p "+shellQuote(dir))
 	return err
 }
 
 func (s *SSHWorker) ReadPID(ctx context.Context, pidFile string) (int, error) {
-	out, err := s.run(ctx, "cat "+shellQuote(pidFile)+" 2>/dev/null || true")
+	out, err := s.runner(ctx, "cat "+shellQuote(pidFile)+" 2>/dev/null || true")
 	if err != nil {
 		return 0, err
 	}
@@ -61,7 +64,7 @@ func (s *SSHWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error)
 		return false, nil
 	}
 	cmd := fmt.Sprintf("kill -0 %d >/dev/null 2>&1 && echo RUNNING || echo DEAD", pid)
-	out, err := s.run(ctx, cmd)
+	out, err := s.runner(ctx, cmd)
 	if err != nil {
 		return false, err
 	}
@@ -107,7 +110,7 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 	}
 
 	// Rename part to final on remote
-	if _, err := s.run(ctx, fmt.Sprintf("mv %s %s", shellQuote(remotePart), shellQuote(remoteFinalPath))); err != nil {
+	if _, err := s.runner(ctx, fmt.Sprintf("mv %s %s", shellQuote(remotePart), shellQuote(remoteFinalPath))); err != nil {
 		return "", fmt.Errorf("remote rename failed: %w", err)
 	}
 
@@ -161,7 +164,7 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 
 func (s *SSHWorker) MD5(ctx context.Context, path string) (string, error) {
 	cmd := "md5sum " + shellQuote(path) + " | awk '{print $1}'"
-	out, err := s.run(ctx, cmd)
+	out, err := s.runner(ctx, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -179,7 +182,7 @@ func (s *SSHWorker) StartCommand(ctx context.Context, command, pidFile, exitFile
 	if s.vlog != nil {
 		s.vlog("wrapped command: %s", wrapped)
 	}
-	if _, err := s.run(ctx, wrapped); err != nil {
+	if _, err := s.runner(ctx, wrapped); err != nil {
 		return 0, err
 	}
 	pid, err := s.ReadPID(ctx, pidFile)
@@ -215,7 +218,7 @@ func (s *SSHWorker) WaitForExit(ctx context.Context, pid int, exitFile, stderrLo
 	}
 
 	_ = s.streamRemoteLog(ctx, stderrLog, stderrSink, &offset)
-	out, err := s.run(ctx, "cat "+shellQuote(exitFile)+" 2>/dev/null || true")
+	out, err := s.runner(ctx, "cat "+shellQuote(exitFile)+" 2>/dev/null || true")
 	if err != nil {
 		return 1, nil
 	}
@@ -228,7 +231,7 @@ func (s *SSHWorker) WaitForExit(ctx context.Context, pid int, exitFile, stderrLo
 
 func (s *SSHWorker) FileExistsNonZero(ctx context.Context, path string) (bool, error) {
 	cmd := "test -s " + shellQuote(path) + " && echo OK || true"
-	out, err := s.run(ctx, cmd)
+	out, err := s.runner(ctx, cmd)
 	if err != nil {
 		return false, err
 	}
@@ -280,7 +283,7 @@ func (s *SSHWorker) Remove(ctx context.Context, paths ...string) error {
 	if len(quoted) == 0 {
 		return nil
 	}
-	_, err := s.run(ctx, "rm -f "+strings.Join(quoted, " "))
+	_, err := s.runner(ctx, "rm -f "+strings.Join(quoted, " "))
 	return err
 }
 
@@ -288,7 +291,7 @@ func (s *SSHWorker) SignalTERM(ctx context.Context, pid int) error {
 	if pid <= 0 {
 		return nil
 	}
-	_, err := s.run(ctx, fmt.Sprintf("kill -TERM %d >/dev/null 2>&1 || true", pid))
+	_, err := s.runner(ctx, fmt.Sprintf("kill -TERM %d >/dev/null 2>&1 || true", pid))
 	return err
 }
 
@@ -297,7 +300,7 @@ func (s *SSHWorker) streamRemoteLog(ctx context.Context, logPath string, sink io
 		return nil
 	}
 	cmd := fmt.Sprintf("if [ -f %s ]; then tail -c +%d %s; fi", shellQuote(logPath), *offset+1, shellQuote(logPath))
-	out, err := s.run(ctx, cmd)
+	out, err := s.runner(ctx, cmd)
 	if err != nil {
 		return err
 	}
