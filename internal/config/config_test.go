@@ -104,19 +104,26 @@ func TestValidateDuplicateNodeNames(t *testing.T) {
 	}
 }
 
-func TestDefaultMaxConcurrent(t *testing.T) {
+func TestValidateDefaults(t *testing.T) {
 	cfg := &Config{
 		Nodes: []Node{
 			{
 				Name:    "test",
 				Address: "localhost",
 				Command: "ffmpeg -i {{.Input}} {{.Output}}",
+				MaxConcurrent: 0,
+				TmpDir: "",
 			},
 		},
 	}
-	cfg.Validate()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate failed: %v", err)
+	}
 	if cfg.Nodes[0].MaxConcurrent != 1 {
-		t.Errorf("expected max_concurrent to default to 1, got %d", cfg.Nodes[0].MaxConcurrent)
+		t.Errorf("expected MaxConcurrent 1, got %d", cfg.Nodes[0].MaxConcurrent)
+	}
+	if cfg.Nodes[0].TmpDir != "/tmp/teleconvert" {
+		t.Errorf("expected TmpDir /tmp/teleconvert, got %q", cfg.Nodes[0].TmpDir)
 	}
 }
 
