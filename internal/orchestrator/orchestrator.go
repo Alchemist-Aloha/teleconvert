@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -167,16 +168,16 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case sig := <-sigCh:
 			pterm.Warning.Printf("received signal %s, performing clean shutdown...\n", sig)
-			cancel()
 			o.cleanKill(context.Background(), ld, &activeMu, active)
+			cancel()
 		case res := <-results:
 			inFlight--
 			freeSlots = append(freeSlots, res.slot)
 			if res.err != nil {
 				pterm.Error.Printf("job failed: %s (%v)\n", res.job.InputPath, res.err)
 				if !o.opts.ContinueOnErr {
-					cancel()
 					o.cleanKill(context.Background(), ld, &activeMu, active)
+					cancel()
 				}
 			} else {
 				pterm.Success.Printf("job done: %s -> %s\n", res.job.InputPath, res.job.OutputPath)
@@ -209,6 +210,11 @@ func (o *Orchestrator) runJob(ctx context.Context, job discovery.Job, sl slot, l
 func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slot, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc) error {
 	w := sl.w
 	node := sl.node
+	defer func() {
+		activeMu.Lock()
+		delete(active, job.InputPath)
+		activeMu.Unlock()
+	}()
 	if err := ld.Set(job.InputPath, ledger.StatusTransferring, node.Name, ""); err != nil {
 		return err
 	}
@@ -218,12 +224,30 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 
-	jobID := jobIDFromPath(job.InputPath)
-	remoteInput := filepath.ToSlash(filepath.Join(node.TmpDir, jobID+".input"))
-	remoteOutput := filepath.ToSlash(filepath.Join(node.TmpDir, jobID+".output"))
+	remoteInput, remoteOutput := remoteJobPaths(node.TmpDir, job)
 
 	o.vlog("uploading %s to %s:%s", job.InputPath, node.Name, remoteInput)
 	part, err := w.UploadAtomic(ctx, job.InputPath, remoteInput)
+	commandMayBeRunning := false
+	pid := 0
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if commandMayBeRunning {
+			if pid <= 0 {
+				pid, _ = w.ReadPID(cleanupCtx, sl.pidFile)
+			}
+			if pid > 0 {
+				if err := w.SignalTERM(cleanupCtx, pid); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to stop pid %d during cleanup on %s: %v\n", pid, node.Name, err)
+				}
+			}
+		}
+		if err := w.Remove(cleanupCtx, part, remoteInput, remoteOutput, sl.pidFile, sl.exitFile, sl.stderrLog); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cleanup failed on %s: %v\n", node.Name, err)
+		}
+	}()
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "upload failed: "+err.Error())
 		return err
@@ -234,18 +258,15 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	localMD5, err := fileMD5(job.InputPath)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "local md5 failed: "+err.Error())
-		_ = w.Remove(ctx, part, remoteInput)
 		return err
 	}
 	remoteMD5, err := w.MD5(ctx, remoteInput)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "remote md5 failed: "+err.Error())
-		_ = w.Remove(ctx, part, remoteInput)
 		return err
 	}
 	if !strings.EqualFold(localMD5, remoteMD5) {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "md5 mismatch")
-		_ = w.Remove(ctx, part, remoteInput)
 		return fmt.Errorf("md5 mismatch for %s", job.InputPath)
 	}
 	o.vlog("md5 match for %s (%s)", job.InputPath, localMD5)
@@ -253,15 +274,18 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	cmd, err := renderCommand(node.Command, remoteInput, remoteOutput)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "render command failed: "+err.Error())
-		_ = w.Remove(ctx, part, remoteInput)
 		return err
 	}
 
 	o.vlog("starting remote command on %s: %s", node.Name, cmd)
-	pid, err := w.StartCommand(ctx, cmd, sl.pidFile, sl.exitFile, sl.stderrLog)
+	activeMu.Lock()
+	active[job.InputPath] = activeProc{job: job, sl: sl, part: part}
+	activeMu.Unlock()
+
+	commandMayBeRunning = true
+	pid, err = w.StartCommand(ctx, cmd, sl.pidFile, sl.exitFile, sl.stderrLog)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "start command failed: "+err.Error())
-		_ = w.Remove(ctx, part, remoteInput)
 		return err
 	}
 	o.vlog("remote command started on %s with pid %d", node.Name, pid)
@@ -269,11 +293,6 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	activeMu.Lock()
 	active[job.InputPath] = activeProc{job: job, sl: sl, pid: pid, part: part}
 	activeMu.Unlock()
-	defer func() {
-		activeMu.Lock()
-		delete(active, job.InputPath)
-		activeMu.Unlock()
-	}()
 
 	if err := ld.Set(job.InputPath, ledger.StatusWorking, node.Name, ""); err != nil {
 		return err
@@ -285,12 +304,11 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	exitCode, err := w.WaitForExit(ctx, pid, sl.exitFile, sl.stderrLog, o.opts.PollInterval, prefixed)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "wait failed: "+err.Error())
-		_ = w.Remove(ctx, sl.pidFile)
 		return err
 	}
+	commandMayBeRunning = false
 	if exitCode != 0 {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", fmt.Sprintf("remote exit code %d", exitCode))
-		_ = w.Remove(ctx, sl.pidFile)
 		return fmt.Errorf("remote command exit code %d", exitCode)
 	}
 
@@ -300,11 +318,17 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 	if !ok {
-		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "remote output missing or empty")
-		return errors.New("remote output missing or empty")
+		err := fmt.Errorf("remote output %q missing or empty; encoder exited successfully but did not create the expected file (check the command template and output format options)", remoteOutput)
+		_ = ld.Set(job.InputPath, ledger.StatusPending, "", err.Error())
+		return err
 	}
 
 	localTmp := job.OutputPath + ".tmp"
+	defer func() {
+		if err := os.Remove(localTmp); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove local temp file %s: %v\n", localTmp, err)
+		}
+	}()
 	o.vlog("downloading %s:%s to %s", node.Name, remoteOutput, job.OutputPath)
 	if err := w.Download(ctx, remoteOutput, localTmp); err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "download failed: "+err.Error())
@@ -315,10 +339,6 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 	o.vlog("download done for %s", job.OutputPath)
-
-	if err := w.Remove(ctx, part, remoteInput, remoteOutput, sl.pidFile, sl.exitFile, sl.stderrLog); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cleanup failed on %s: %v\n", node.Name, err)
-	}
 
 	if o.opts.DeleteSource {
 		if err := os.Remove(job.InputPath); err != nil && !os.IsNotExist(err) {
@@ -332,11 +352,35 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 
 func (o *Orchestrator) cleanKill(ctx context.Context, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc) {
 	activeMu.Lock()
-	defer activeMu.Unlock()
-
+	processes := make([]activeProc, 0, len(active))
 	for _, p := range active {
-		_ = p.sl.w.SignalTERM(ctx, p.pid)
-		_ = p.sl.w.Remove(ctx, p.part, p.sl.pidFile)
+		processes = append(processes, p)
+	}
+	activeMu.Unlock()
+
+	for _, p := range processes {
+		pid := p.pid
+		if pid <= 0 {
+			var err error
+			pid, err = p.sl.w.ReadPID(ctx, p.sl.pidFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to read pid on %s during shutdown: %v\n", p.sl.node.Name, err)
+			}
+		}
+		if pid <= 0 {
+			fmt.Fprintf(os.Stderr, "warning: no pid available for interrupted job on %s\n", p.sl.node.Name)
+		} else if err := p.sl.w.SignalTERM(ctx, pid); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to stop pid %d on %s: %v\n", pid, p.sl.node.Name, err)
+		} else {
+			remoteInput, remoteOutput := remoteJobPaths(p.sl.node.TmpDir, p.job)
+			if err := p.sl.w.Remove(ctx, p.part, remoteInput, remoteOutput, p.sl.pidFile, p.sl.exitFile, p.sl.stderrLog); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clean interrupted job on %s: %v\n", p.sl.node.Name, err)
+			}
+			localTmp := p.job.OutputPath + ".tmp"
+			if err := os.Remove(localTmp); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "warning: failed to remove interrupted local temp file %s: %v\n", localTmp, err)
+			}
+		}
 		_ = ld.Set(p.job.InputPath, ledger.StatusPending, "", "interrupted")
 	}
 }
@@ -426,9 +470,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 
 func renderCommand(tpl, input, output string) (string, error) {
 	funcMap := template.FuncMap{
-		"quote": func(s string) string {
-			return fmt.Sprintf("%q", s)
-		},
+		"quote": shellQuote,
 	}
 	t, err := template.New("command").Funcs(funcMap).Parse(tpl)
 	if err != nil {
@@ -439,8 +481,8 @@ func renderCommand(tpl, input, output string) (string, error) {
 		Input  string
 		Output string
 	}{
-		Input:  fmt.Sprintf("%q", input),
-		Output: fmt.Sprintf("%q", output),
+		Input:  shellQuote(input),
+		Output: shellQuote(output),
 	}
 	if err := t.Execute(&b, data); err != nil {
 		return "", err
@@ -449,8 +491,36 @@ func renderCommand(tpl, input, output string) (string, error) {
 }
 
 func jobIDFromPath(path string) string {
-	repl := strings.NewReplacer("/", "_", "\\", "_", ":", "_")
-	return repl.Replace(path)
+	sum := sha256.Sum256([]byte(path))
+	return "teleconvert-" + hex.EncodeToString(sum[:16])
+}
+
+func remoteJobPaths(tmpDir string, job discovery.Job) (string, string) {
+	id := jobIDFromPath(job.InputPath)
+	inputName := id + ".input" + safeRemoteExtension(filepath.Ext(job.InputPath))
+	outputName := id + ".output" + safeRemoteExtension(filepath.Ext(job.OutputPath))
+	return filepath.ToSlash(filepath.Join(tmpDir, inputName)),
+		filepath.ToSlash(filepath.Join(tmpDir, outputName))
+}
+
+func safeRemoteExtension(ext string) string {
+	ext = strings.ToLower(strings.TrimPrefix(ext, "."))
+	if ext == "" || len(ext) > 16 {
+		return ""
+	}
+	for _, r := range ext {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return ""
+		}
+	}
+	return "." + ext
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func fileMD5(path string) (string, error) {

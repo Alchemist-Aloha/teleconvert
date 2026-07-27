@@ -31,13 +31,13 @@ func TestRenderCommand(t *testing.T) {
 			"ffmpeg -i {{.Input}} -o {{.Output}}",
 			"/input/video.mp4",
 			"/output/video.mp4",
-			"ffmpeg -i \"/input/video.mp4\" -o \"/output/video.mp4\"",
+			"ffmpeg -i '/input/video.mp4' -o '/output/video.mp4'",
 		},
 		{
 			"HandBrakeCLI -i {{.Input}} -o {{.Output}} --preset 'High Profile'",
 			"/input/video.mp4",
 			"/output/video.mp4",
-			"HandBrakeCLI -i \"/input/video.mp4\" -o \"/output/video.mp4\" --preset 'High Profile'",
+			"HandBrakeCLI -i '/input/video.mp4' -o '/output/video.mp4' --preset 'High Profile'",
 		},
 	}
 
@@ -137,20 +137,47 @@ func TestOrchestratorSlotStress(t *testing.T) {
 }
 
 func TestJobIDFromPath(t *testing.T) {
-	tests := []struct {
-		path string
-		want string
-	}{
-		{"/path/to/video.mp4", "_path_to_video.mp4"},
-		{"C:\\path\\to\\video.mp4", "C__path_to_video.mp4"},
-		{"/path:with:colons", "_path_with_colons"},
+	first := jobIDFromPath("/path/to/video.mp4")
+	second := jobIDFromPath("/other/path/to/video.mp4")
+	if first == second {
+		t.Fatal("different paths must produce different job IDs")
 	}
-
-	for _, tt := range tests {
-		got := jobIDFromPath(tt.path)
-		if got != tt.want {
-			t.Errorf("jobIDFromPath(%q) = %q, want %q", tt.path, got, tt.want)
+	for _, id := range []string{first, second} {
+		if len(id) != len("teleconvert-")+32 || !strings.HasPrefix(id, "teleconvert-") {
+			t.Errorf("expected short stable hashed job ID, got %q", id)
 		}
+	}
+}
+
+func TestRenderCommandShellQuotesSpecialCharacters(t *testing.T) {
+	got, err := renderCommand(
+		"ffmpeg -i {{.Input}} {{.Output}}",
+		"/tmp/a file's $(touch BAD).mp4",
+		"/tmp/out file.mkv",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ffmpeg -i '/tmp/a file'\"'\"'s $(touch BAD).mp4' '/tmp/out file.mkv'"
+	if got != want {
+		t.Errorf("renderCommand got %q, want %q", got, want)
+	}
+}
+
+func TestRemoteJobPathsPreserveSafeExtensions(t *testing.T) {
+	job := discovery.Job{
+		InputPath:  "/media/a very long 'name' [1080p].MP4",
+		OutputPath: "/media/converted/a very long 'name' [1080p].mkv",
+	}
+	input, output := remoteJobPaths("/tmp/worker files", job)
+	if !strings.HasSuffix(input, ".input.mp4") {
+		t.Errorf("input extension not preserved: %s", input)
+	}
+	if !strings.HasSuffix(output, ".output.mkv") {
+		t.Errorf("output extension not preserved: %s", output)
+	}
+	if len(filepath.Base(input)) > 80 || len(filepath.Base(output)) > 80 {
+		t.Errorf("remote names should remain short: %s, %s", input, output)
 	}
 }
 
@@ -345,6 +372,7 @@ type mockWorker struct {
 	signalCalled chan int
 	md5Func      func(ctx context.Context, path string) (string, error)
 	uploadFunc   func(ctx context.Context, local, remote string) (string, error)
+	removeFunc   func(ctx context.Context, paths ...string) error
 }
 
 func (m *mockWorker) Node() config.Node                                           { return m.node }
@@ -365,7 +393,12 @@ func (m *mockWorker) FileExistsNonZero(ctx context.Context, path string) (bool, 
 func (m *mockWorker) Download(ctx context.Context, remote, local string) error {
 	return os.WriteFile(local, []byte("output"), 0644)
 }
-func (m *mockWorker) Remove(ctx context.Context, paths ...string) error { return nil }
+func (m *mockWorker) Remove(ctx context.Context, paths ...string) error {
+	if m.removeFunc != nil {
+		return m.removeFunc(ctx, paths...)
+	}
+	return nil
+}
 func (m *mockWorker) SignalTERM(ctx context.Context, pid int) error {
 	if m.signalCalled != nil {
 		m.signalCalled <- pid
@@ -429,6 +462,76 @@ func TestOrchestratorMD5Mismatch(t *testing.T) {
 	}
 }
 
+func TestOrchestratorSuccessfulJobCleansTemporaryFiles(t *testing.T) {
+	tmpdir := t.TempDir()
+	inputPath := filepath.Join(tmpdir, "test.mp4")
+	outputPath := filepath.Join(tmpdir, "converted", "test.mkv")
+	remoteDir := filepath.Join(tmpdir, "remote")
+	for _, dir := range []string{filepath.Dir(outputPath), remoteDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(inputPath, []byte("video data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var removed []string
+	mw := &mockWorker{
+		node: config.Node{Name: "worker1", TmpDir: remoteDir, Command: "ffmpeg {{.Input}} {{.Output}}"},
+		md5Func: func(ctx context.Context, path string) (string, error) {
+			return fileMD5(path)
+		},
+		removeFunc: func(ctx context.Context, paths ...string) error {
+			removed = append(removed, paths...)
+			return nil
+		},
+	}
+	o := New(Options{})
+	ld, _ := ledger.New(tmpdir)
+	job := discovery.Job{InputPath: inputPath, OutputPath: outputPath}
+	sl := slot{
+		w:         mw,
+		node:      mw.node,
+		pidFile:   filepath.Join(remoteDir, "job.pid"),
+		exitFile:  filepath.Join(remoteDir, "job.exit"),
+		stderrLog: filepath.Join(remoteDir, "job.log"),
+	}
+	active := make(map[string]activeProc)
+	var activeMu sync.Mutex
+
+	if err := o.executeJob(context.Background(), job, sl, ld, &activeMu, active); err != nil {
+		t.Fatalf("execute job: %v", err)
+	}
+
+	remoteInput, remoteOutput := remoteJobPaths(remoteDir, job)
+	expectedRemoved := []string{
+		remoteInput + ".part",
+		remoteInput,
+		remoteOutput,
+		sl.pidFile,
+		sl.exitFile,
+		sl.stderrLog,
+	}
+	for _, expected := range expectedRemoved {
+		if !containsString(removed, expected) {
+			t.Errorf("expected temporary file %s to be removed; got %v", expected, removed)
+		}
+	}
+	if _, err := os.Stat(outputPath + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("local temporary output was not removed: %s.tmp", outputPath)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOrchestratorInterrupt(t *testing.T) {
 	active := make(map[string]activeProc)
 	var activeMu sync.Mutex
@@ -465,5 +568,33 @@ func TestOrchestratorInterrupt(t *testing.T) {
 	}
 	if entry.Status != ledger.StatusPending || !strings.Contains(entry.LastError, "interrupted") {
 		t.Errorf("expected status pending with interrupted message, got %s: %s", entry.Status, entry.LastError)
+	}
+}
+
+func TestOrchestratorInterruptRecoversPIDFromFile(t *testing.T) {
+	active := make(map[string]activeProc)
+	var activeMu sync.Mutex
+	sigCalled := make(chan int, 1)
+	mw := &mockWorker{
+		node:         config.Node{Name: "mockNode"},
+		signalCalled: sigCalled,
+	}
+
+	active["test.mp4"] = activeProc{
+		job: discovery.Job{InputPath: "test.mp4"},
+		sl:  slot{w: mw, pidFile: "/tmp/teleconvert.pid"},
+	}
+
+	o := New(Options{})
+	ld, _ := ledger.New(t.TempDir())
+	o.cleanKill(context.Background(), ld, &activeMu, active)
+
+	select {
+	case pid := <-sigCalled:
+		if pid != 1 {
+			t.Errorf("expected recovered pid 1, got %d", pid)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SignalTERM")
 	}
 }

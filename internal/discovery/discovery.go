@@ -75,6 +75,7 @@ func Discover(inputPath, outputDir, outputExt string) ([]Job, string, error) {
 
 func discoverDir(inputDir, outputDir, outputExt string, useLocalConvertedDir bool) ([]Job, error) {
 	jobs := make([]Job, 0, 64)
+	outputSources := make(map[string]string)
 	err := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -111,6 +112,10 @@ func discoverDir(inputDir, outputDir, outputExt string, useLocalConvertedDir boo
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return err
 		}
+		if existingSource, exists := outputSources[outPath]; exists {
+			return fmt.Errorf("output path collision: %s and %s both map to %s", existingSource, path, outPath)
+		}
+		outputSources[outPath] = path
 		jobs = append(jobs, Job{InputPath: path, OutputPath: outPath})
 		return nil
 	})

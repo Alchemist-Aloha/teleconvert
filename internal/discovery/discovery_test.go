@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,8 +217,8 @@ func TestDiscoverNonExistentPath(t *testing.T) {
 func TestDiscoverMixedVideoFormats(t *testing.T) {
 	tmpdir := t.TempDir()
 	formats := []string{".mp4", ".mkv", ".mov", ".avi", ".webm", ".ts"}
-	for _, fmt := range formats {
-		path := filepath.Join(tmpdir, "video"+fmt)
+	for i, format := range formats {
+		path := filepath.Join(tmpdir, fmt.Sprintf("video%d%s", i, format))
 		if err := os.WriteFile(path, []byte("fake"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -228,6 +230,23 @@ func TestDiscoverMixedVideoFormats(t *testing.T) {
 	}
 	if len(jobs) != len(formats) {
 		t.Errorf("expected %d jobs for all formats, got %d", len(formats), len(jobs))
+	}
+}
+
+func TestDiscoverRejectsOutputFilenameCollision(t *testing.T) {
+	tmpdir := t.TempDir()
+	for _, name := range []string{"movie.mp4", "movie.avi"} {
+		if err := os.WriteFile(filepath.Join(tmpdir, name), []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, _, err := Discover(tmpdir, "", ".mkv")
+	if err == nil {
+		t.Fatal("expected output path collision error")
+	}
+	if !strings.Contains(err.Error(), "output path collision") {
+		t.Fatalf("expected descriptive collision error, got %v", err)
 	}
 }
 

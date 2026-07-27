@@ -106,12 +106,12 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 	}
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("rsync upload failed: %w", err)
+		return remotePart, fmt.Errorf("rsync upload failed: %w", err)
 	}
 
 	// Rename part to final on remote
 	if _, err := s.runner(ctx, fmt.Sprintf("mv %s %s", shellQuote(remotePart), shellQuote(remoteFinalPath))); err != nil {
-		return "", fmt.Errorf("remote rename failed: %w", err)
+		return remotePart, fmt.Errorf("remote rename failed: %w", err)
 	}
 
 	return remotePart, nil
@@ -172,7 +172,7 @@ func (s *SSHWorker) MD5(ctx context.Context, path string) (string, error) {
 }
 
 func (s *SSHWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
-	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
+	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup setsid sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),
 		shellQuote(command+"; ec=$?; echo $ec > "+shellQuote(exitFile)+"; exit $ec"),
@@ -291,7 +291,16 @@ func (s *SSHWorker) SignalTERM(ctx context.Context, pid int) error {
 	if pid <= 0 {
 		return nil
 	}
-	_, err := s.runner(ctx, fmt.Sprintf("kill -TERM %d >/dev/null 2>&1 || true", pid))
+	// StartCommand creates a separate session whose process group ID is the
+	// recorded PID. Signal the group so child encoders do not survive their
+	// wrapper shell. Escalate after five seconds if a process ignores SIGTERM.
+	command := fmt.Sprintf(
+		"kill -TERM -- -%d >/dev/null 2>&1 || kill -TERM %d >/dev/null 2>&1 || true; "+
+			"i=0; while kill -0 -- -%d >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; "+
+			"kill -KILL -- -%d >/dev/null 2>&1 || true",
+		pid, pid, pid, pid,
+	)
+	_, err := s.runner(ctx, command)
 	return err
 }
 
