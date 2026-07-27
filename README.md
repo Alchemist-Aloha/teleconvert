@@ -5,6 +5,7 @@
 ## Features
 
 - Local and remote worker support (`localhost` or SSH nodes)
+- Local workers read source media in place; only encoder output is staged in the worker `tmp_dir`.
 - Minimum effort on worker setup. Only need SSH and FFmpeg/HandBrakeCLI
 - Per-node concurrency slots (`max_concurrent`)
 - Node heartbeat and busy-slot detection using PID lock files

@@ -225,9 +225,18 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	}
 
 	remoteInput, remoteOutput := remoteJobPaths(node.TmpDir, job)
-
-	o.vlog("uploading %s to %s:%s", job.InputPath, node.Name, remoteInput)
-	part, err := w.UploadAtomic(ctx, job.InputPath, remoteInput)
+	isLocal := config.IsLocalAddress(node.Address)
+	part := ""
+	var err error
+	cleanupPaths := []string{remoteOutput, sl.pidFile, sl.exitFile, sl.stderrLog}
+	if isLocal {
+		remoteInput = job.InputPath
+		o.vlog("using source file directly for local worker: %s", remoteInput)
+	} else {
+		o.vlog("uploading %s to %s:%s", job.InputPath, node.Name, remoteInput)
+		part, err = w.UploadAtomic(ctx, job.InputPath, remoteInput)
+		cleanupPaths = append([]string{part, remoteInput}, cleanupPaths...)
+	}
 	commandMayBeRunning := false
 	pid := 0
 	defer func() {
@@ -244,7 +253,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 				}
 			}
 		}
-		if err := w.Remove(cleanupCtx, part, remoteInput, remoteOutput, sl.pidFile, sl.exitFile, sl.stderrLog); err != nil {
+		if err := w.Remove(cleanupCtx, cleanupPaths...); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: cleanup failed on %s: %v\n", node.Name, err)
 		}
 	}()
@@ -252,24 +261,25 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "upload failed: "+err.Error())
 		return err
 	}
-	o.vlog("upload done for %s", job.InputPath)
-
-	o.vlog("verifying md5 for %s", job.InputPath)
-	localMD5, err := fileMD5(job.InputPath)
-	if err != nil {
-		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "local md5 failed: "+err.Error())
-		return err
+	if !isLocal {
+		o.vlog("upload done for %s", job.InputPath)
+		o.vlog("verifying md5 for %s", job.InputPath)
+		localMD5, err := fileMD5(job.InputPath)
+		if err != nil {
+			_ = ld.Set(job.InputPath, ledger.StatusPending, "", "local md5 failed: "+err.Error())
+			return err
+		}
+		remoteMD5, err := w.MD5(ctx, remoteInput)
+		if err != nil {
+			_ = ld.Set(job.InputPath, ledger.StatusPending, "", "remote md5 failed: "+err.Error())
+			return err
+		}
+		if !strings.EqualFold(localMD5, remoteMD5) {
+			_ = ld.Set(job.InputPath, ledger.StatusPending, "", "md5 mismatch")
+			return fmt.Errorf("md5 mismatch for %s", job.InputPath)
+		}
+		o.vlog("md5 match for %s (%s)", job.InputPath, localMD5)
 	}
-	remoteMD5, err := w.MD5(ctx, remoteInput)
-	if err != nil {
-		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "remote md5 failed: "+err.Error())
-		return err
-	}
-	if !strings.EqualFold(localMD5, remoteMD5) {
-		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "md5 mismatch")
-		return fmt.Errorf("md5 mismatch for %s", job.InputPath)
-	}
-	o.vlog("md5 match for %s (%s)", job.InputPath, localMD5)
 
 	cmd, err := renderCommand(node.Command, remoteInput, remoteOutput)
 	if err != nil {

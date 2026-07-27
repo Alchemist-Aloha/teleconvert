@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -373,6 +374,7 @@ type mockWorker struct {
 	md5Func      func(ctx context.Context, path string) (string, error)
 	uploadFunc   func(ctx context.Context, local, remote string) (string, error)
 	removeFunc   func(ctx context.Context, paths ...string) error
+	startFunc    func(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error)
 }
 
 func (m *mockWorker) Node() config.Node                                           { return m.node }
@@ -382,6 +384,9 @@ func (m *mockWorker) EnsureDir(ctx context.Context, dir string) error           
 func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error)    { return 1, nil }
 func (m *mockWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error) { return false, nil }
 func (m *mockWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
+	if m.startFunc != nil {
+		return m.startFunc(ctx, command, pidFile, exitFile, stderrLog)
+	}
 	return 1, nil
 }
 func (m *mockWorker) WaitForExit(ctx context.Context, pid int, exitFile, stderrLog string, pollInterval time.Duration, stderrSink io.Writer) (int, error) {
@@ -520,6 +525,85 @@ func TestOrchestratorSuccessfulJobCleansTemporaryFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(outputPath + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf("local temporary output was not removed: %s.tmp", outputPath)
+	}
+}
+
+func TestLocalEncoderUsesSourceFileWithoutStagingCopy(t *testing.T) {
+	tmpdir := t.TempDir()
+	inputPath := filepath.Join(tmpdir, "source media's file.mp4")
+	outputPath := filepath.Join(tmpdir, "converted", "source media's file.mkv")
+	workerTmp := filepath.Join(tmpdir, "worker-tmp")
+	for _, dir := range []string{filepath.Dir(outputPath), workerTmp} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(inputPath, []byte("video data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadCalls := 0
+	md5Calls := 0
+	var command string
+	var removed []string
+	mw := &mockWorker{
+		node: config.Node{
+			Name:    "local-encoder",
+			Address: "localhost",
+			TmpDir:  workerTmp,
+			Command: "ffmpeg -i {{.Input}} {{.Output}}",
+		},
+		uploadFunc: func(ctx context.Context, local, remote string) (string, error) {
+			uploadCalls++
+			return "", errors.New("local input must not be uploaded")
+		},
+		md5Func: func(ctx context.Context, path string) (string, error) {
+			md5Calls++
+			return "", errors.New("local input must not be checksummed as a transfer")
+		},
+		startFunc: func(ctx context.Context, cmd, pidFile, exitFile, stderrLog string) (int, error) {
+			command = cmd
+			return 1, nil
+		},
+		removeFunc: func(ctx context.Context, paths ...string) error {
+			removed = append(removed, paths...)
+			return nil
+		},
+	}
+	o := New(Options{})
+	ld, _ := ledger.New(tmpdir)
+	job := discovery.Job{InputPath: inputPath, OutputPath: outputPath}
+	sl := slot{
+		w:         mw,
+		node:      mw.node,
+		pidFile:   filepath.Join(workerTmp, "job.pid"),
+		exitFile:  filepath.Join(workerTmp, "job.exit"),
+		stderrLog: filepath.Join(workerTmp, "job.log"),
+	}
+	active := make(map[string]activeProc)
+	var activeMu sync.Mutex
+
+	if err := o.executeJob(context.Background(), job, sl, ld, &activeMu, active); err != nil {
+		t.Fatalf("execute local job: %v", err)
+	}
+	if uploadCalls != 0 {
+		t.Errorf("local worker staged the source %d times", uploadCalls)
+	}
+	if md5Calls != 0 {
+		t.Errorf("local worker performed %d transfer checksums", md5Calls)
+	}
+	if !strings.Contains(command, shellQuote(inputPath)) {
+		t.Errorf("local command does not use source path directly: %s", command)
+	}
+	_, expectedTmpOutput := remoteJobPaths(workerTmp, job)
+	if !strings.Contains(command, shellQuote(expectedTmpOutput)) {
+		t.Errorf("local command does not write to worker tmp directory: %s", command)
+	}
+	if containsString(removed, inputPath) {
+		t.Errorf("source path must never be included in temporary cleanup: %v", removed)
+	}
+	if !containsString(removed, expectedTmpOutput) {
+		t.Errorf("temporary encoder output was not cleaned: %v", removed)
 	}
 }
 
