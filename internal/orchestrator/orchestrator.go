@@ -59,6 +59,11 @@ type activeProc struct {
 	part string
 }
 
+type jobLedger interface {
+	Set(jobPath, status, worker, lastErr string) error
+	Get(jobPath string) (ledger.Entry, bool)
+}
+
 func New(opts Options) *Orchestrator {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 2 * time.Second
@@ -86,7 +91,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	}
 
 	spinner, _ := pterm.DefaultSpinner.Start("Discovering jobs...")
-	jobs, ledgerRoot, err := discovery.Discover(o.opts.InputPath, o.opts.OutputDir, o.opts.OutputExt)
+	jobs, _, err := discovery.Discover(o.opts.InputPath, o.opts.OutputDir, o.opts.OutputExt)
 	if err != nil {
 		spinner.Fail(err.Error())
 		return err
@@ -96,14 +101,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		return errors.New("no video files discovered")
 	}
 
-	ld, err := ledger.New(ledgerRoot)
-	if err != nil {
-		spinner.Fail(err.Error())
-		return err
-	}
 	jobPaths := make([]string, 0, len(jobs))
 	for _, j := range jobs {
 		jobPaths = append(jobPaths, j.InputPath)
+	}
+	ld, err := ledger.NewRouter(jobPaths)
+	if err != nil {
+		spinner.Fail(err.Error())
+		return err
 	}
 	if err := ld.InitJobs(jobPaths); err != nil {
 		spinner.Fail(err.Error())
@@ -196,12 +201,12 @@ type jobResult struct {
 	err  error
 }
 
-func (o *Orchestrator) runJob(ctx context.Context, job discovery.Job, sl slot, ld *ledger.Ledger, activeMu *sync.Mutex, active map[string]activeProc, results chan<- jobResult) {
+func (o *Orchestrator) runJob(ctx context.Context, job discovery.Job, sl slot, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc, results chan<- jobResult) {
 	err := o.executeJob(ctx, job, sl, ld, activeMu, active)
 	results <- jobResult{job: job, slot: sl, err: err}
 }
 
-func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slot, ld *ledger.Ledger, activeMu *sync.Mutex, active map[string]activeProc) error {
+func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slot, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc) error {
 	w := sl.w
 	node := sl.node
 	if err := ld.Set(job.InputPath, ledger.StatusTransferring, node.Name, ""); err != nil {
@@ -325,7 +330,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	return ld.Set(job.InputPath, ledger.StatusDone, node.Name, "")
 }
 
-func (o *Orchestrator) cleanKill(ctx context.Context, ld *ledger.Ledger, activeMu *sync.Mutex, active map[string]activeProc) {
+func (o *Orchestrator) cleanKill(ctx context.Context, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc) {
 	activeMu.Lock()
 	defer activeMu.Unlock()
 

@@ -61,7 +61,7 @@ func TestRenderCommandInvalidTemplate(t *testing.T) {
 
 func TestOrchestratorSlotStress(t *testing.T) {
 	tmpdir := t.TempDir()
-	
+
 	// Create some input files
 	inputDir := filepath.Join(tmpdir, "input")
 	os.MkdirAll(inputDir, 0755)
@@ -89,7 +89,6 @@ func TestOrchestratorSlotStress(t *testing.T) {
 	o := New(Options{
 		ConfigPath:    configPath,
 		InputPath:     inputDir,
-		OutputDir:     filepath.Join(tmpdir, "output"),
 		PollInterval:  10 * time.Millisecond,
 		ContinueOnErr: true,
 		Verbose:       true,
@@ -117,6 +116,14 @@ func TestOrchestratorSlotStress(t *testing.T) {
 	if len(snap.Jobs) != 100 {
 		t.Errorf("expected 100 jobs in ledger, got %d", len(snap.Jobs))
 	}
+	statusPath := filepath.Join(inputDir, ".teleconvert_status.json")
+	if _, err := os.Stat(statusPath); err != nil {
+		t.Errorf("expected ledger in source folder at %s: %v", statusPath, err)
+	}
+	convertedStatusPath := filepath.Join(inputDir, "converted", ".teleconvert_status.json")
+	if _, err := os.Stat(convertedStatusPath); !os.IsNotExist(err) {
+		t.Errorf("ledger must not be stored in converted folder: %s", convertedStatusPath)
+	}
 	for path, entry := range snap.Jobs {
 		if entry.Status != ledger.StatusDone {
 			t.Errorf("job %s expected done, got %s (Error: %q)", path, entry.Status, entry.LastError)
@@ -124,7 +131,6 @@ func TestOrchestratorSlotStress(t *testing.T) {
 	}
 
 	if t.Failed() {
-		statusPath := filepath.Join(inputDir, ".teleconvert_status.json")
 		b, _ := os.ReadFile(statusPath)
 		t.Logf("Raw Ledger file: %s", string(b))
 	}
@@ -341,11 +347,11 @@ type mockWorker struct {
 	uploadFunc   func(ctx context.Context, local, remote string) (string, error)
 }
 
-func (m *mockWorker) Node() config.Node { return m.node }
-func (m *mockWorker) Heartbeat(ctx context.Context) error { return nil }
-func (m *mockWorker) CheckCommand(ctx context.Context, cmd string) error { return nil }
-func (m *mockWorker) EnsureDir(ctx context.Context, dir string) error { return nil }
-func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error) { return 1, nil }
+func (m *mockWorker) Node() config.Node                                           { return m.node }
+func (m *mockWorker) Heartbeat(ctx context.Context) error                         { return nil }
+func (m *mockWorker) CheckCommand(ctx context.Context, cmd string) error          { return nil }
+func (m *mockWorker) EnsureDir(ctx context.Context, dir string) error             { return nil }
+func (m *mockWorker) ReadPID(ctx context.Context, pidFile string) (int, error)    { return 1, nil }
 func (m *mockWorker) IsProcessRunning(ctx context.Context, pid int) (bool, error) { return false, nil }
 func (m *mockWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
 	return 1, nil

@@ -21,7 +21,7 @@ func main() {
 
 	flag.StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath(), "Path to teleconvert YAML config")
 	flag.StringVar(&opts.InputPath, "input", "", "Input file or directory")
-	flag.StringVar(&opts.OutputDir, "output-dir", "", "Output directory (default: input/converted for directory input)")
+	flag.StringVar(&opts.OutputDir, "output-dir", "", "Output directory (default: converted beside each source file)")
 	flag.StringVar(&opts.OutputExt, "output-ext", ".mp4", "Output extension")
 	flag.BoolVar(&opts.DeleteSource, "delete-source", false, "Delete source file after successful conversion")
 	flag.BoolVar(&opts.ContinueOnErr, "continue-on-error", true, "Continue processing remaining jobs when a job fails")

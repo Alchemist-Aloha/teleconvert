@@ -44,13 +44,16 @@ func Discover(inputPath, outputDir, outputExt string) ([]Job, string, error) {
 	}
 
 	if fi.IsDir() {
+		useLocalConvertedDir := outputDir == ""
 		if outputDir == "" {
 			outputDir = filepath.Join(inAbs, "converted")
 		}
-		if err := os.MkdirAll(outputDir, 0o755); err != nil {
-			return nil, "", fmt.Errorf("create output dir: %w", err)
+		if !useLocalConvertedDir {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				return nil, "", fmt.Errorf("create output dir: %w", err)
+			}
 		}
-		jobs, err := discoverDir(inAbs, outputDir, outputExt)
+		jobs, err := discoverDir(inAbs, outputDir, outputExt, useLocalConvertedDir)
 		if err != nil {
 			return nil, "", err
 		}
@@ -70,27 +73,41 @@ func Discover(inputPath, outputDir, outputExt string) ([]Job, string, error) {
 	}}, filepath.Dir(inAbs), nil
 }
 
-func discoverDir(inputDir, outputDir, outputExt string) ([]Job, error) {
+func discoverDir(inputDir, outputDir, outputExt string, useLocalConvertedDir bool) ([]Job, error) {
 	jobs := make([]Job, 0, 64)
 	err := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if path == outputDir {
+			if !useLocalConvertedDir && path == outputDir {
 				return filepath.SkipDir
+			}
+			if d.Name() == "converted" {
+				statusPath := filepath.Join(filepath.Dir(path), ".teleconvert_status.json")
+				if _, err := os.Stat(statusPath); err == nil {
+					return filepath.SkipDir
+				} else if !os.IsNotExist(err) {
+					return fmt.Errorf("stat status file %s: %w", statusPath, err)
+				}
 			}
 			return nil
 		}
 		if _, ok := videoExt[strings.ToLower(filepath.Ext(d.Name()))]; !ok {
 			return nil
 		}
-		rel, err := filepath.Rel(inputDir, path)
-		if err != nil {
-			return err
+		var outPath string
+		if useLocalConvertedDir {
+			base := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())) + outputExt
+			outPath = filepath.Join(filepath.Dir(path), "converted", base)
+		} else {
+			rel, err := filepath.Rel(inputDir, path)
+			if err != nil {
+				return err
+			}
+			outRel := strings.TrimSuffix(rel, filepath.Ext(rel)) + outputExt
+			outPath = filepath.Join(outputDir, outRel)
 		}
-		outRel := strings.TrimSuffix(rel, filepath.Ext(rel)) + outputExt
-		outPath := filepath.Join(outputDir, outRel)
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return err
 		}

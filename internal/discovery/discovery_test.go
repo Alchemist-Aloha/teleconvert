@@ -122,12 +122,86 @@ func TestDiscoverRecursiveStructure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobs, _, err := Discover(tmpdir, "", "")
+	jobs, _, err := Discover(tmpdir, "", ".mkv")
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
 	if len(jobs) != 1 {
 		t.Errorf("expected 1 job from nested dir, got %d", len(jobs))
+	}
+	expectedOutput := filepath.Join(subdir, "converted", "episode.mkv")
+	if jobs[0].OutputPath != expectedOutput {
+		t.Errorf("expected output %s, got %s", expectedOutput, jobs[0].OutputPath)
+	}
+}
+
+func TestDiscoverExplicitOutputDirPreservesRecursiveStructure(t *testing.T) {
+	tmpdir := t.TempDir()
+	inputDir := filepath.Join(tmpdir, "input")
+	subdir := filepath.Join(inputDir, "season1", "episode1")
+	outputDir := filepath.Join(tmpdir, "output")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(subdir, "episode.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, _, err := Discover(inputDir, outputDir, ".mkv")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	expectedOutput := filepath.Join(outputDir, "season1", "episode1", "episode.mkv")
+	if len(jobs) != 1 || jobs[0].OutputPath != expectedOutput {
+		t.Fatalf("expected output %s, got %+v", expectedOutput, jobs)
+	}
+}
+
+func TestDiscoverSkipsConvertedDirWithSiblingStatusFile(t *testing.T) {
+	tmpdir := t.TempDir()
+	sourceDir := filepath.Join(tmpdir, "A", "B", "C")
+	convertedDir := filepath.Join(sourceDir, "converted")
+	if err := os.MkdirAll(convertedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(sourceDir, "D.mp4")
+	convertedPath := filepath.Join(convertedDir, "D.mkv")
+	for _, path := range []string{sourcePath, convertedPath} {
+		if err := os.WriteFile(path, []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, ".teleconvert_status.json"), []byte(`{"version":1,"jobs":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, _, err := Discover(tmpdir, "", ".mkv")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].InputPath != sourcePath {
+		t.Fatalf("expected only source media %s, got %+v", sourcePath, jobs)
+	}
+}
+
+func TestDiscoverIncludesConvertedDirWithoutSiblingStatusFile(t *testing.T) {
+	tmpdir := t.TempDir()
+	convertedDir := filepath.Join(tmpdir, "archive", "converted")
+	if err := os.MkdirAll(convertedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(convertedDir, "original.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, _, err := Discover(tmpdir, "", ".mkv")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].InputPath != videoPath {
+		t.Fatalf("expected converted-named source directory to be included, got %+v", jobs)
 	}
 }
 

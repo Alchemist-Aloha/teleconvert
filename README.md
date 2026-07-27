@@ -15,7 +15,8 @@
   - sends SIGTERM to managed remote/local processes
   - removes active remote `.part` files
   - marks interrupted jobs back to `pending`
-- Jobs and progress are tracked in a ledger file written into the input root: `.teleconvert_status.json`.
+- Jobs and progress are tracked in `.teleconvert_status.json` files written beside the source media in each directory.
+- A `converted` directory is excluded from discovery when its parent contains `.teleconvert_status.json`.
 - Remote uploads are performed atomically (temporary `.part` files, then rename) and checksummed when configured.
 
 ## Config
@@ -65,7 +66,7 @@ go build -o teleconvert ./cmd/teleconvert
 Flags:
 
 - `-input`: input file or directory (required)
-- `-output-dir`: destination directory (default: `input/converted` for directory input)
+- `-output-dir`: destination directory (default: a `converted` directory beside each source file)
 - `-output-ext`: output extension (default `.mp4`)
 - `-delete-source`: delete source files when each job succeeds
 - `-continue-on-error`: keep running after per-job failures (default `true`)

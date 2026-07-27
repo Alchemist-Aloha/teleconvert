@@ -35,6 +35,61 @@ type Ledger struct {
 	mu    sync.Mutex
 }
 
+// Router stores each job in a ledger beside its source file.
+type Router struct {
+	ledgers map[string]*Ledger
+}
+
+func NewRouter(jobPaths []string) (*Router, error) {
+	r := &Router{ledgers: make(map[string]*Ledger)}
+	for _, jobPath := range jobPaths {
+		dir := filepath.Dir(jobPath)
+		if _, ok := r.ledgers[dir]; ok {
+			continue
+		}
+		l, err := New(dir)
+		if err != nil {
+			return nil, err
+		}
+		r.ledgers[dir] = l
+	}
+	return r, nil
+}
+
+func (r *Router) InitJobs(jobPaths []string) error {
+	jobsByDir := make(map[string][]string)
+	for _, jobPath := range jobPaths {
+		dir := filepath.Dir(jobPath)
+		jobsByDir[dir] = append(jobsByDir[dir], jobPath)
+	}
+	for dir, paths := range jobsByDir {
+		l, ok := r.ledgers[dir]
+		if !ok {
+			return fmt.Errorf("no ledger for source directory %s", dir)
+		}
+		if err := l.InitJobs(paths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Router) Set(jobPath, status, worker, lastErr string) error {
+	l, ok := r.ledgers[filepath.Dir(jobPath)]
+	if !ok {
+		return fmt.Errorf("no ledger for job %s", jobPath)
+	}
+	return l.Set(jobPath, status, worker, lastErr)
+}
+
+func (r *Router) Get(jobPath string) (Entry, bool) {
+	l, ok := r.ledgers[filepath.Dir(jobPath)]
+	if !ok {
+		return Entry{}, false
+	}
+	return l.Get(jobPath)
+}
+
 func New(root string) (*Ledger, error) {
 	path := filepath.Join(root, ".teleconvert_status.json")
 	l := &Ledger{

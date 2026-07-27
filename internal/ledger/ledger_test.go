@@ -91,6 +91,40 @@ func TestLedgerAtomicWrite(t *testing.T) {
 	}
 }
 
+func TestRouterStoresLedgersBesideSourceFiles(t *testing.T) {
+	tmpdir := t.TempDir()
+	dirA := filepath.Join(tmpdir, "A", "B", "C")
+	dirB := filepath.Join(tmpdir, "A", "other")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jobs := []string{
+		filepath.Join(dirA, "D.mp4"),
+		filepath.Join(dirB, "E.mp4"),
+	}
+
+	r, err := NewRouter(jobs)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+	if err := r.InitJobs(jobs); err != nil {
+		t.Fatalf("init jobs: %v", err)
+	}
+
+	for _, dir := range []string{dirA, dirB} {
+		statusPath := filepath.Join(dir, ".teleconvert_status.json")
+		if _, err := os.Stat(statusPath); err != nil {
+			t.Errorf("expected ledger beside source media at %s: %v", statusPath, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tmpdir, "A", ".teleconvert_status.json")); !os.IsNotExist(err) {
+		t.Error("did not expect a combined ledger in the conversion root")
+	}
+}
+
 func TestLedgerSnapshot(t *testing.T) {
 	tmpdir := t.TempDir()
 	ld, _ := New(tmpdir)
