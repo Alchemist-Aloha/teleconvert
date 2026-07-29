@@ -39,6 +39,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          version="dev"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="$GITHUB_REF_NAME"
+          fi
           for target in \
             linux/amd64 \
             linux/arm64 \
@@ -50,7 +54,8 @@ jobs:
             asset="teleconvert_${os}_${arch}"
             mkdir -p "build/${asset}"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -trimpath -ldflags="-s -w" -o "build/${asset}/teleconvert" .
+              go build -trimpath -ldflags="-s -w -X main.version=${version}" \
+              -o "build/${asset}/teleconvert" .
             tar -C "build/${asset}" -czf "dist/${asset}.tar.gz" teleconvert
           done
           (

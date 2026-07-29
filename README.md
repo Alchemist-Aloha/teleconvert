@@ -91,6 +91,7 @@ Flags:
 - `-continue-on-error`: keep running after per-job failures (default `true`)
 - `-verbose` / `-v`: enable verbose logging
 - `-poll-interval`: worker monitor interval (default `2s`)
+- `-version`: print the embedded build version and exit
 
 ## Terminal dashboard
 

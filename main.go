@@ -11,8 +11,11 @@ import (
 	"teleconvert/internal/orchestrator"
 )
 
+var version = "dev"
+
 func main() {
 	var opts orchestrator.Options
+	showVersion := flag.Bool("version", false, "Print version and exit")
 
 	flag.StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath(), "Path to teleconvert YAML config")
 	flag.StringVar(&opts.InputPath, "input", "", "Input file or directory")
@@ -24,6 +27,11 @@ func main() {
 	flag.BoolVar(&opts.Verbose, "v", false, "Enable verbose logging (shorthand)")
 	poll := flag.Duration("poll-interval", 2*time.Second, "Remote process poll interval")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("teleconvert %s\n", version)
+		return
+	}
 
 	if opts.InputPath == "" {
 		fmt.Fprintln(os.Stderr, "-input is required")

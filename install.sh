@@ -36,15 +36,36 @@ esac
 
 asset="teleconvert_${os}_${arch}.tar.gz"
 if [[ "$VERSION" == "latest" ]]; then
-  release_base="https://github.com/${REPOSITORY}/releases/latest/download"
+  latest_url=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPOSITORY}/releases/latest")
+  latest_url=${latest_url%/}
+  installing_version=${latest_url##*/}
+  if [[ -z "$installing_version" || "$installing_version" == "latest" ]]; then
+    echo "teleconvert installer: could not resolve the latest release version" >&2
+    exit 1
+  fi
 else
-  release_base="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+  installing_version=$VERSION
 fi
+release_base="https://github.com/${REPOSITORY}/releases/download/${installing_version}"
+
+installed_binary="$INSTALL_DIR/teleconvert"
+if [[ -x "$installed_binary" ]]; then
+  installed_version=$("$installed_binary" -version 2>/dev/null || true)
+  if [[ -z "$installed_version" ]]; then
+    installed_version="unknown (older build)"
+  fi
+else
+  installed_version="not installed"
+fi
+
+echo "Installed version:  $installed_version"
+echo "Installing version: teleconvert $installing_version"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
-echo "Downloading teleconvert ${VERSION} for ${os}/${arch}..."
+echo "Downloading teleconvert ${installing_version} for ${os}/${arch}..."
 curl -fsSL --retry 3 -o "$tmp_dir/$asset" "$release_base/$asset"
 curl -fsSL --retry 3 -o "$tmp_dir/checksums.txt" "$release_base/checksums.txt"
 
@@ -78,7 +99,7 @@ else
   echo "Preserved existing configuration: $config_file"
 fi
 
-echo "Installed teleconvert: $INSTALL_DIR/teleconvert"
+echo "Installed teleconvert ${installing_version}: $INSTALL_DIR/teleconvert"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) echo "Add $INSTALL_DIR to PATH to run teleconvert from any directory." ;;
