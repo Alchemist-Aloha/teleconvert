@@ -1,6 +1,6 @@
 # teleconvert
 
-`teleconvert` is a small Go CLI for orchestrating robust transcoding jobs across local and SSH workers. It runs arbitrary encoder commands (HandBrakeCLI, ffmpeg, etc.) provided as templates in your YAML node configuratefion.
+`teleconvert` is a small Go CLI for orchestrating robust transcoding jobs across local and SSH workers. It runs arbitrary encoder commands (HandBrakeCLI, ffmpeg, etc.) provided as templates in your YAML node configuration.
 
 ## Features
 
@@ -11,7 +11,9 @@
 - Node heartbeat and busy-slot detection using PID lock files
 - MD5 verification after upload
 - Remote command lifecycle tracking with PID files
-- Periodic monitoring and stderr streaming back to local terminal
+- Full-window terminal dashboard with separate teleconvert and encoder output
+- Overall queue progress and per-worker HandBrakeCLI/ffmpeg progress
+- Selectable, isolated encoder logs for every concurrency slot
 - SIGINT/SIGTERM clean-kill behavior:
   - sends SIGTERM to managed remote/local processes
   - removes active remote `.part` files
@@ -51,7 +53,7 @@ nodes:
 
 ```bash
 go mod tidy
-go build -o teleconvert ./cmd/teleconvert
+go build -o teleconvert .
 ```
 
 ## Usage
@@ -73,6 +75,28 @@ Flags:
 - `-continue-on-error`: keep running after per-job failures (default `true`)
 - `-verbose` / `-v`: enable verbose logging
 - `-poll-interval`: worker monitor interval (default `2s`)
+
+## Terminal dashboard
+
+When run in an interactive terminal, teleconvert uses the terminal's alternate
+screen and restores the previous contents when it exits. The top of the screen
+shows total completion and the current job and progress for each worker slot.
+Teleconvert lifecycle messages and raw encoder output appear in separate panes.
+
+- `↑` / `↓`, `j` / `k`, or `Tab`: select a worker slot
+- `1`–`9`: select a worker slot directly
+- `Page Up` / `Page Down` or `u` / `d`: scroll the selected encoder output
+- `g` / `Home`: jump to the oldest available encoder output
+- `G` / `End`: return to the live encoder output
+- `q` or `Ctrl-C`: stop active encoders cleanly and exit
+
+HandBrakeCLI percentage output is recognized directly, including multi-pass
+tasks. For ffmpeg, progress is calculated from its reported `Duration` and
+`time`/`out_time` fields. Measurable encoding progress includes elapsed time and
+an ETA; phases without a reliable percentage use a moving activity indicator
+instead of displaying a misleading zero. When output is redirected or
+teleconvert is run without a TTY, it automatically uses ordinary line-oriented
+output instead.
 
 Notes:
 

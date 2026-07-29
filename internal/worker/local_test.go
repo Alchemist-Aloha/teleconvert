@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,6 +210,44 @@ func TestLocalWorkerStartCommand(t *testing.T) {
 
 	if _, err := os.Stat(pidFile); err != nil {
 		t.Errorf("pid file not created: %v", err)
+	}
+}
+
+func TestLocalWorkerStreamsStdoutAndStderr(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping shell integration test in short mode")
+	}
+	tmpdir := t.TempDir()
+	pidFile := filepath.Join(tmpdir, "test.pid")
+	exitFile := filepath.Join(tmpdir, "test.exit")
+	outputLog := filepath.Join(tmpdir, "test.output.log")
+
+	w := NewLocal(config.Node{Name: "local", Address: "localhost", TmpDir: tmpdir}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pid, err := w.StartCommand(
+		ctx,
+		"echo 'Encoding: task 1 of 1, 25.00 %'; echo 'stderr detail' >&2",
+		pidFile,
+		exitFile,
+		outputLog,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sink bytes.Buffer
+	exitCode, err := w.WaitForExit(ctx, pid, exitFile, outputLog, 10*time.Millisecond, &sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d", exitCode)
+	}
+	for _, want := range []string{"Encoding: task 1 of 1, 25.00 %", "stderr detail"} {
+		if !strings.Contains(sink.String(), want) {
+			t.Fatalf("combined encoder output is missing %q: %q", want, sink.String())
+		}
 	}
 }
 

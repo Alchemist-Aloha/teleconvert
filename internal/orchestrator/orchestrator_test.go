@@ -17,8 +17,6 @@ import (
 	"teleconvert/internal/discovery"
 	"teleconvert/internal/ledger"
 	"teleconvert/internal/worker"
-
-	"github.com/pterm/pterm"
 )
 
 func TestRenderCommand(t *testing.T) {
@@ -94,7 +92,6 @@ func TestOrchestratorSlotStress(t *testing.T) {
 		ContinueOnErr: true,
 		Verbose:       true,
 	})
-	pterm.EnableDebugMessages()
 	o.workerFactory = func(node config.Node, vlog func(string, ...any)) worker.Worker {
 		return mw
 	}

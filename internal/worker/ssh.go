@@ -100,13 +100,9 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 	}
 
 	cmd := exec.CommandContext(ctx, rsyncCmd[0], rsyncCmd[1:]...)
-	if s.vlog != nil {
-		cmd.Stdout = &prefixWriter{prefix: "[rsync] ", out: os.Stderr}
-		cmd.Stderr = &prefixWriter{prefix: "[rsync-err] ", out: os.Stderr}
-	}
-
-	if err := cmd.Run(); err != nil {
-		return remotePart, fmt.Errorf("rsync upload failed: %w", err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return remotePart, commandOutputError("rsync upload", err, out)
 	}
 
 	// Rename part to final on remote
@@ -115,31 +111,6 @@ func (s *SSHWorker) UploadAtomic(ctx context.Context, localPath, remoteFinalPath
 	}
 
 	return remotePart, nil
-}
-
-type prefixWriter struct {
-	prefix string
-	out    io.Writer
-	buf    []byte
-}
-
-func (p *prefixWriter) Write(b []byte) (int, error) {
-	p.buf = append(p.buf, b...)
-	for {
-		idx := strings.IndexByte(string(p.buf), '\n')
-		if idx == -1 {
-			break
-		}
-		line := p.buf[:idx+1]
-		if _, err := fmt.Fprint(p.out, p.prefix); err != nil {
-			return 0, err
-		}
-		if _, err := p.out.Write(line); err != nil {
-			return 0, err
-		}
-		p.buf = p.buf[idx+1:]
-	}
-	return len(b), nil
 }
 
 type progressWriter struct {
@@ -172,7 +143,9 @@ func (s *SSHWorker) MD5(ctx context.Context, path string) (string, error) {
 }
 
 func (s *SSHWorker) StartCommand(ctx context.Context, command, pidFile, exitFile, stderrLog string) (int, error) {
-	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup setsid sh -c %s >/dev/null 2>%s </dev/null & pid=$!; echo $pid > %s",
+	// Capture both output streams. Encoder versions and wrapper scripts vary
+	// in whether progress is written to stdout or stderr.
+	wrapped := fmt.Sprintf("set -e; rm -f %s %s; nohup setsid sh -c %s >%s 2>&1 </dev/null & pid=$!; echo $pid > %s",
 		shellQuote(pidFile),
 		shellQuote(exitFile),
 		shellQuote(command+"; ec=$?; echo $ec > "+shellQuote(exitFile)+"; exit $ec"),
@@ -264,12 +237,19 @@ func (s *SSHWorker) Download(ctx context.Context, remotePath, localPath string) 
 	}
 
 	cmd := exec.CommandContext(ctx, rsyncCmd[0], rsyncCmd[1:]...)
-	if s.vlog != nil {
-		cmd.Stdout = &prefixWriter{prefix: "[rsync] ", out: os.Stderr}
-		cmd.Stderr = &prefixWriter{prefix: "[rsync-err] ", out: os.Stderr}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return commandOutputError("rsync download", err, out)
 	}
+	return nil
+}
 
-	return cmd.Run()
+func commandOutputError(operation string, err error, output []byte) error {
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		return fmt.Errorf("%s failed: %w", operation, err)
+	}
+	return fmt.Errorf("%s failed: %w (%s)", operation, err, detail)
 }
 
 func (s *SSHWorker) Remove(ctx context.Context, paths ...string) error {

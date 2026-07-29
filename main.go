@@ -9,14 +9,9 @@ import (
 
 	"teleconvert/internal/config"
 	"teleconvert/internal/orchestrator"
-
-	"github.com/pterm/pterm"
 )
 
 func main() {
-	pterm.DefaultBigText.WithLetters(pterm.NewLettersFromString("TELECONVERT")).Render()
-	pterm.DefaultSection.WithLevel(2).Println("Video Conversion Orchestrator")
-
 	var opts orchestrator.Options
 
 	flag.StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath(), "Path to teleconvert YAML config")

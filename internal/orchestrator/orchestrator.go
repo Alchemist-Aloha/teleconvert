@@ -21,9 +21,8 @@ import (
 	"teleconvert/internal/config"
 	"teleconvert/internal/discovery"
 	"teleconvert/internal/ledger"
+	"teleconvert/internal/tui"
 	"teleconvert/internal/worker"
-
-	"github.com/pterm/pterm"
 )
 
 type Options struct {
@@ -41,6 +40,7 @@ type Orchestrator struct {
 	opts          Options
 	workerFactory func(config.Node, func(string, ...any)) worker.Worker
 	sigNotify     func(chan<- os.Signal, ...os.Signal)
+	ui            *tui.Dashboard
 }
 
 type slot struct {
@@ -71,6 +71,7 @@ func New(opts Options) *Orchestrator {
 	}
 	return &Orchestrator{
 		opts: opts,
+		ui:   tui.New(os.Stdin, os.Stdout),
 		workerFactory: func(node config.Node, vlog func(string, ...any)) worker.Worker {
 			if config.IsLocalAddress(node.Address) {
 				return worker.NewLocal(node, vlog)
@@ -82,23 +83,20 @@ func New(opts Options) *Orchestrator {
 }
 
 func (o *Orchestrator) Run(ctx context.Context) error {
-	if o.opts.Verbose {
-		pterm.EnableDebugMessages()
-	}
+	o.ui.Start()
+	defer o.ui.Close()
 
 	cfg, err := config.Load(o.opts.ConfigPath)
 	if err != nil {
 		return err
 	}
 
-	spinner, _ := pterm.DefaultSpinner.Start("Discovering jobs...")
+	o.log("Discovering jobs...")
 	jobs, _, err := discovery.Discover(o.opts.InputPath, o.opts.OutputDir, o.opts.OutputExt)
 	if err != nil {
-		spinner.Fail(err.Error())
 		return err
 	}
 	if len(jobs) == 0 {
-		spinner.Fail("no video files discovered")
 		return errors.New("no video files discovered")
 	}
 
@@ -108,14 +106,12 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	}
 	ld, err := ledger.NewRouter(jobPaths)
 	if err != nil {
-		spinner.Fail(err.Error())
 		return err
 	}
 	if err := ld.InitJobs(jobPaths); err != nil {
-		spinner.Fail(err.Error())
 		return err
 	}
-	spinner.Success(fmt.Sprintf("Discovered %d total jobs", len(jobs)))
+	o.log("Discovered %d total jobs", len(jobs))
 
 	slots, err := o.buildSlots(ctx, cfg)
 	if err != nil {
@@ -134,11 +130,15 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		pending = append(pending, j)
 	}
 	if len(pending) == 0 {
-		pterm.Info.Println("all jobs already marked done in ledger")
+		o.log("All jobs already marked done in ledger")
 		return nil
 	}
 
-	pterm.Info.Printf("discovered %d total jobs, %d pending\n", len(jobs), len(pending))
+	o.ui.SetTotal(len(pending))
+	for _, sl := range slots {
+		o.ui.RegisterWorker(sl.name, sl.node.Name)
+	}
+	o.log("%d pending jobs across %d worker slots", len(pending), len(slots))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -167,20 +167,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		select {
 		case sig := <-sigCh:
-			pterm.Warning.Printf("received signal %s, performing clean shutdown...\n", sig)
+			o.log("Received signal %s; performing clean shutdown...", sig)
+			o.cleanKill(context.Background(), ld, &activeMu, active)
+			cancel()
+		case <-o.ui.Quit():
+			o.log("Shutdown requested; stopping active encoders...")
 			o.cleanKill(context.Background(), ld, &activeMu, active)
 			cancel()
 		case res := <-results:
 			inFlight--
 			freeSlots = append(freeSlots, res.slot)
+			o.ui.JobFinished(res.slot.name, res.err)
 			if res.err != nil {
-				pterm.Error.Printf("job failed: %s (%v)\n", res.job.InputPath, res.err)
+				o.log("FAILED %s on %s: %v", res.job.InputPath, res.slot.name, res.err)
 				if !o.opts.ContinueOnErr {
 					o.cleanKill(context.Background(), ld, &activeMu, active)
 					cancel()
 				}
 			} else {
-				pterm.Success.Printf("job done: %s -> %s\n", res.job.InputPath, res.job.OutputPath)
+				o.log("Done %s -> %s", res.job.InputPath, res.job.OutputPath)
 			}
 		case <-time.After(250 * time.Millisecond):
 		}
@@ -210,6 +215,7 @@ func (o *Orchestrator) runJob(ctx context.Context, job discovery.Job, sl slot, l
 func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slot, ld jobLedger, activeMu *sync.Mutex, active map[string]activeProc) error {
 	w := sl.w
 	node := sl.node
+	o.ui.JobStarted(sl.name, job.InputPath)
 	defer func() {
 		activeMu.Lock()
 		delete(active, job.InputPath)
@@ -218,6 +224,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	if err := ld.Set(job.InputPath, ledger.StatusTransferring, node.Name, ""); err != nil {
 		return err
 	}
+	o.ui.JobStage(sl.name, "preparing")
 
 	if err := w.EnsureDir(ctx, node.TmpDir); err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "ensure tmp dir failed: "+err.Error())
@@ -233,6 +240,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		remoteInput = job.InputPath
 		o.vlog("using source file directly for local worker: %s", remoteInput)
 	} else {
+		o.ui.JobStage(sl.name, "uploading")
 		o.vlog("uploading %s to %s:%s", job.InputPath, node.Name, remoteInput)
 		part, err = w.UploadAtomic(ctx, job.InputPath, remoteInput)
 		cleanupPaths = append([]string{part, remoteInput}, cleanupPaths...)
@@ -249,12 +257,12 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 			}
 			if pid > 0 {
 				if err := w.SignalTERM(cleanupCtx, pid); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to stop pid %d during cleanup on %s: %v\n", pid, node.Name, err)
+					o.log("Warning: failed to stop pid %d during cleanup on %s: %v", pid, node.Name, err)
 				}
 			}
 		}
 		if err := w.Remove(cleanupCtx, cleanupPaths...); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: cleanup failed on %s: %v\n", node.Name, err)
+			o.log("Warning: cleanup failed on %s: %v", node.Name, err)
 		}
 	}()
 	if err != nil {
@@ -262,6 +270,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 	if !isLocal {
+		o.ui.JobStage(sl.name, "verifying")
 		o.vlog("upload done for %s", job.InputPath)
 		o.vlog("verifying md5 for %s", job.InputPath)
 		localMD5, err := fileMD5(job.InputPath)
@@ -293,6 +302,7 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	activeMu.Unlock()
 
 	commandMayBeRunning = true
+	o.ui.JobStage(sl.name, "starting")
 	pid, err = w.StartCommand(ctx, cmd, sl.pidFile, sl.exitFile, sl.stderrLog)
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "start command failed: "+err.Error())
@@ -308,10 +318,8 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 		return err
 	}
 
-	color := getColorForNode(node.Name)
-	prefix := pterm.Color(color).Sprint(" " + node.Name + " ")
-	prefixed := &prefixWriter{prefix: "[" + prefix + "] ", out: os.Stderr}
-	exitCode, err := w.WaitForExit(ctx, pid, sl.exitFile, sl.stderrLog, o.opts.PollInterval, prefixed)
+	o.ui.JobStage(sl.name, "encoding")
+	exitCode, err := w.WaitForExit(ctx, pid, sl.exitFile, sl.stderrLog, o.opts.PollInterval, o.ui.WorkerWriter(sl.name))
 	if err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "wait failed: "+err.Error())
 		return err
@@ -336,10 +344,11 @@ func (o *Orchestrator) executeJob(ctx context.Context, job discovery.Job, sl slo
 	localTmp := job.OutputPath + ".tmp"
 	defer func() {
 		if err := os.Remove(localTmp); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: failed to remove local temp file %s: %v\n", localTmp, err)
+			o.log("Warning: failed to remove local temp file %s: %v", localTmp, err)
 		}
 	}()
 	o.vlog("downloading %s:%s to %s", node.Name, remoteOutput, job.OutputPath)
+	o.ui.JobStage(sl.name, "downloading")
 	if err := w.Download(ctx, remoteOutput, localTmp); err != nil {
 		_ = ld.Set(job.InputPath, ledger.StatusPending, "", "download failed: "+err.Error())
 		return err
@@ -374,46 +383,35 @@ func (o *Orchestrator) cleanKill(ctx context.Context, ld jobLedger, activeMu *sy
 			var err error
 			pid, err = p.sl.w.ReadPID(ctx, p.sl.pidFile)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to read pid on %s during shutdown: %v\n", p.sl.node.Name, err)
+				o.log("Warning: failed to read pid on %s during shutdown: %v", p.sl.node.Name, err)
 			}
 		}
 		if pid <= 0 {
-			fmt.Fprintf(os.Stderr, "warning: no pid available for interrupted job on %s\n", p.sl.node.Name)
+			o.log("Warning: no pid available for interrupted job on %s", p.sl.node.Name)
 		} else if err := p.sl.w.SignalTERM(ctx, pid); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to stop pid %d on %s: %v\n", pid, p.sl.node.Name, err)
+			o.log("Warning: failed to stop pid %d on %s: %v", pid, p.sl.node.Name, err)
 		} else {
 			remoteInput, remoteOutput := remoteJobPaths(p.sl.node.TmpDir, p.job)
 			if err := p.sl.w.Remove(ctx, p.part, remoteInput, remoteOutput, p.sl.pidFile, p.sl.exitFile, p.sl.stderrLog); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to clean interrupted job on %s: %v\n", p.sl.node.Name, err)
+				o.log("Warning: failed to clean interrupted job on %s: %v", p.sl.node.Name, err)
 			}
 			localTmp := p.job.OutputPath + ".tmp"
 			if err := os.Remove(localTmp); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "warning: failed to remove interrupted local temp file %s: %v\n", localTmp, err)
+				o.log("Warning: failed to remove interrupted local temp file %s: %v", localTmp, err)
 			}
 		}
 		_ = ld.Set(p.job.InputPath, ledger.StatusPending, "", "interrupted")
 	}
 }
 
-var nodeColors = []pterm.Color{
-	pterm.FgCyan,
-	pterm.FgMagenta,
-	pterm.FgBlue,
-	pterm.FgYellow,
-	pterm.FgGreen,
-	pterm.FgRed,
-}
-
-func getColorForNode(name string) pterm.Color {
-	sum := 0
-	for _, r := range name {
-		sum += int(r)
-	}
-	return nodeColors[sum%len(nodeColors)]
-}
-
 func (o *Orchestrator) vlog(format string, args ...any) {
-	pterm.Debug.Printf(format, args...)
+	if o.opts.Verbose {
+		o.ui.Event(format, args...)
+	}
+}
+
+func (o *Orchestrator) log(format string, args ...any) {
+	o.ui.Event(format, args...)
 }
 
 func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]slot, error) {
@@ -427,25 +425,25 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 		} else {
 			o.vlog("node %s is remote", n.Name)
 			if n.User == "" {
-				fmt.Fprintf(os.Stderr, "skip node %s: user is required for ssh node\n", n.Name)
+				o.log("Skip node %s: user is required for ssh node", n.Name)
 				continue
 			}
 			if n.SSHKey == "" {
-				fmt.Fprintf(os.Stderr, "skip node %s: ssh_key is required for ssh node\n", n.Name)
+				o.log("Skip node %s: ssh_key is required for ssh node", n.Name)
 				continue
 			}
 			w = o.workerFactory(n, o.vlog)
 		}
 
 		if err := w.Heartbeat(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "skip node %s: heartbeat failed: %v\n", n.Name, err)
+			o.log("Skip node %s: heartbeat failed: %v", n.Name, err)
 			continue
 		}
 		o.vlog("node %s heartbeat ok", n.Name)
 
 		cmdName := strings.Fields(n.Command)[0]
 		if err := w.CheckCommand(ctx, cmdName); err != nil {
-			fmt.Fprintf(os.Stderr, "skip node %s: command %q not found: %v\n", n.Name, cmdName, err)
+			o.log("Skip node %s: command %q not found: %v", n.Name, cmdName, err)
 			continue
 		}
 		o.vlog("node %s command %q found", n.Name, cmdName)
@@ -459,7 +457,7 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 			if err == nil && pid > 0 {
 				running, runErr := w.IsProcessRunning(ctx, pid)
 				if runErr == nil && running {
-					fmt.Fprintf(os.Stderr, "node %s slot %d busy with pid %d\n", n.Name, i, pid)
+					o.log("Node %s slot %d busy with pid %d", n.Name, i, pid)
 					continue
 				}
 			}
