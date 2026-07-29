@@ -90,6 +90,10 @@ Teleconvert lifecycle messages and raw encoder output appear in separate panes.
 - `G` / `End`: return to the live encoder output
 - `q` or `Ctrl-C`: stop active encoders cleanly and exit
 
+After all jobs finish, the interactive dashboard remains open for review until
+you press `Ctrl-C` or `q`. Non-interactive and redirected runs still exit
+automatically.
+
 HandBrakeCLI percentage output is recognized directly, including multi-pass
 tasks. For ffmpeg, progress is calculated from its reported `Duration` and
 `time`/`out_time` fields. Measurable encoding progress includes elapsed time and

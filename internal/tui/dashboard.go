@@ -108,6 +108,8 @@ func (d *Dashboard) Close() {
 
 func (d *Dashboard) Quit() <-chan struct{} { return d.quit }
 
+func (d *Dashboard) Interactive() bool { return d.interactive }
+
 func (d *Dashboard) SetTotal(total int) {
 	d.mu.Lock()
 	d.total = total

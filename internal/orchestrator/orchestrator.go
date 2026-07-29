@@ -130,7 +130,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		pending = append(pending, j)
 	}
 	if len(pending) == 0 {
-		o.log("All jobs already marked done in ledger")
+		o.log("All jobs already marked done in ledger. Press Ctrl-C or q to close the dashboard.")
+		o.waitForDismissal(ctx)
 		return nil
 	}
 
@@ -198,7 +199,19 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	if nextIdx < len(pending) || inFlight > 0 {
 		return errors.New("conversion interrupted before completion")
 	}
+	o.log("All jobs finished. Press Ctrl-C or q to close the dashboard.")
+	o.waitForDismissal(ctx)
 	return nil
+}
+
+func (o *Orchestrator) waitForDismissal(ctx context.Context) {
+	if !o.ui.Interactive() {
+		return
+	}
+	select {
+	case <-o.ui.Quit():
+	case <-ctx.Done():
+	}
 }
 
 type jobResult struct {
