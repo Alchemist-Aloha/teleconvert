@@ -54,13 +54,6 @@ nodes:
   tmp_dir: "/tmp/teleconvert"
 ```
 
-## Build
-
-```bash
-go mod tidy
-go build -o teleconvert .
-```
-
 ## Install
 
 Install the latest compiled release on Linux or macOS:
@@ -130,3 +123,10 @@ Notes:
 - The `-config` flag defaults to the path above; you can also pass a local YAML such as `example-config.yaml`.
 - Each node `command` in the config must include the `{{.Input}}` and `{{.Output}}` placeholders; the CLI will substitute paths per-job.
 - See `example-config.yaml` for a working sample configuration.
+
+## Build
+
+```bash
+go mod tidy
+go build -o teleconvert .
+```
