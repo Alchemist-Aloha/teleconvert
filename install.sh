@@ -1,26 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-BIN_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config/teleconvert"
-CONFIG_FILE="$CONFIG_DIR/teleconvert.yaml"
+REPOSITORY="Alchemist-Aloha/teleconvert"
+INSTALL_DIR="${TELECONVERT_INSTALL_DIR:-$HOME/.local/bin}"
+CONFIG_DIR="${TELECONVERT_CONFIG_DIR:-$HOME/.config/teleconvert}"
+VERSION="${TELECONVERT_VERSION:-latest}"
 
-mkdir -p "$BIN_DIR" "$CONFIG_DIR"
-
-pushd "$SCRIPT_DIR" >/dev/null
-  echo "Building teleconvert..."
-  go build -o ./teleconvert .
-
-  echo "Installing teleconvert to $BIN_DIR"
-  install -m 0755 ./teleconvert "$BIN_DIR/teleconvert"
-
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "Creating config at $CONFIG_FILE"
-    cp ./example-config.yaml "$CONFIG_FILE"
-  else
-    echo "Config already exists at $CONFIG_FILE"
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "teleconvert installer: required command not found: $1" >&2
+    exit 1
   fi
-popd >/dev/null
+}
 
-echo "Installation complete."
+require_command curl
+require_command tar
+
+case "$(uname -s)" in
+  Linux) os="linux" ;;
+  Darwin) os="darwin" ;;
+  *)
+    echo "teleconvert installer: unsupported operating system: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+case "$(uname -m)" in
+  x86_64 | amd64) arch="amd64" ;;
+  arm64 | aarch64) arch="arm64" ;;
+  *)
+    echo "teleconvert installer: unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+asset="teleconvert_${os}_${arch}.tar.gz"
+if [[ "$VERSION" == "latest" ]]; then
+  release_base="https://github.com/${REPOSITORY}/releases/latest/download"
+else
+  release_base="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+fi
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+
+echo "Downloading teleconvert ${VERSION} for ${os}/${arch}..."
+curl -fsSL --retry 3 -o "$tmp_dir/$asset" "$release_base/$asset"
+curl -fsSL --retry 3 -o "$tmp_dir/checksums.txt" "$release_base/checksums.txt"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  (
+    cd "$tmp_dir"
+    grep " ${asset}$" checksums.txt | sha256sum -c -
+  )
+elif command -v shasum >/dev/null 2>&1; then
+  (
+    cd "$tmp_dir"
+    grep " ${asset}$" checksums.txt | shasum -a 256 -c -
+  )
+else
+  echo "teleconvert installer: sha256sum or shasum is required" >&2
+  exit 1
+fi
+
+tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
+mkdir -p "$INSTALL_DIR"
+install -m 0755 "$tmp_dir/teleconvert" "$INSTALL_DIR/teleconvert"
+
+config_file="$CONFIG_DIR/teleconvert.yaml"
+if [[ ! -f "$config_file" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  curl -fsSL --retry 3 \
+    "https://raw.githubusercontent.com/${REPOSITORY}/main/example-config.yaml" \
+    -o "$config_file"
+  echo "Created configuration: $config_file"
+else
+  echo "Preserved existing configuration: $config_file"
+fi
+
+echo "Installed teleconvert: $INSTALL_DIR/teleconvert"
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) echo "Add $INSTALL_DIR to PATH to run teleconvert from any directory." ;;
+esac

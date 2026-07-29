@@ -1,6 +1,11 @@
 # teleconvert
 
 `teleconvert` is a small Go CLI for orchestrating robust transcoding jobs across local and SSH workers. It runs arbitrary encoder commands (HandBrakeCLI, ffmpeg, etc.) provided as templates in your YAML node configuration.
+Install the latest compiled release on Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Alchemist-Aloha/teleconvert/main/install.sh | bash
+```
 
 ## Features
 
@@ -55,6 +60,24 @@ nodes:
 go mod tidy
 go build -o teleconvert .
 ```
+
+## Install
+
+Install the latest compiled release on Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Alchemist-Aloha/teleconvert/main/install.sh | bash
+```
+
+The installer verifies the release checksum, installs the binary to
+`~/.local/bin`, and creates the example configuration only when no existing
+configuration is present. Override the defaults with
+`TELECONVERT_INSTALL_DIR`, `TELECONVERT_CONFIG_DIR`, or
+`TELECONVERT_VERSION=v1.2.3`.
+
+GitHub Actions tests and compiles every push and pull request. Pushing a tag
+such as `v1.0.0` creates a GitHub Release with checksum-protected Linux and
+macOS binaries for AMD64 and ARM64.
 
 ## Usage
 
