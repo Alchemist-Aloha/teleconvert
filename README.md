@@ -23,25 +23,25 @@ shows total completion and the current job and progress for each worker slot.
 Teleconvert lifecycle messages and raw encoder output appear in separate panes.
 
 ```
-┌─ TELECONVERT  [=========         ]  7/15 done  0 failed ──────────┐
-┌─ Workers (↑/↓, j/k, tab or 1-9 to select) ───────────────────────┐
-│ > remote         encoding   [==============]  42.3%  elapsed 01:23  video1.mkv│
+┌─ TELECONVERT  [=========         ]  7/15 done  0 failed ────────────────────────┐
+┌─ Workers (↑/↓, j/k, tab or 1-9 to select) ──────────────────────────────────────┐
+│ > remote         encoding   [==============]  42.3%  elapsed 01:23  video1.mkv  │
 │   remote         encoding   [====            ]  12.1%  elapsed 00:47  video2.mkv│
-│   local          idle                                                  │
+│   local          idle                                                           │
 │   local          encoding   [=============== ]  78.5%  elapsed 02:07  video4.mkv│
-└──────────────────────────────────────────────────────────────────────┘
-┌─ Teleconvert output ───────────────────────────────────────────────┐
-│ 14:23:01  remote:video1.mkv encoding started                         │
-│ 14:23:15  local:video4.mkv encoding started                          │
-│ 14:23:30  remote:video2.mkv encoding started                         │
-│ 14:23:45  remote:video3.mkv error: no subtitle track 1, skipping     │
-│ 14:23:46  local:video4.mkv pass 1 (1/2)  58.2%                       │
-└──────────────────────────────────────────────────────────────────────┘
-┌─ Encoder output — remote  [live] ──────────────────────────────────┐
-│ Encoding: task 1 of 1, 42.37 % (12.00 fps)                           │
-│ [14:23:01] 1: encoding started                                       │
-│ [14:23:15] 1: sync: audio 0x1 -> audio 0x0, bitrate 160             │
-└──────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────────┘
+┌─ Teleconvert output ────────────────────────────────────────────────────────────┐
+│ 14:23:01  remote:video1.mkv encoding started                                    │
+│ 14:23:15  local:video4.mkv encoding started                                     │
+│ 14:23:30  remote:video2.mkv encoding started                                    │
+│ 14:23:45  remote:video3.mkv error: no subtitle track 1, skipping                │
+│ 14:23:46  local:video4.mkv pass 1 (1/2)  58.2%                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+┌─ Encoder output — remote  [live] ───────────────────────────────────────────────┐
+│ Encoding: task 1 of 1, 42.37 % (12.00 fps)                                      │
+│ [14:23:01] 1: encoding started                                                  │
+│ [14:23:15] 1: sync: audio 0x1 -> audio 0x0, bitrate 160                         │
+└─────────────────────────────────────────────────────────────────────────────────┘
  PgUp/PgDn or u/d: scroll • g/G: oldest/live • q/Ctrl-C: clean shutdown
 ```
 
