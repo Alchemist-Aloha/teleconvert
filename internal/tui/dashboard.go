@@ -60,6 +60,7 @@ type workerState struct {
 	duration              float64
 	started               time.Time
 	encodingStarted       time.Time
+	finished              time.Time
 	scroll                int
 }
 
@@ -152,7 +153,7 @@ func (d *Dashboard) JobStarted(id, path string) {
 	w.job, w.status, w.progress = filepath.Base(path), "working", 0
 	w.progressKnown = false
 	w.lines, w.partial, w.duration = nil, "", 0
-	w.started, w.encodingStarted = time.Now(), time.Time{}
+	w.started, w.encodingStarted, w.finished = time.Now(), time.Time{}, time.Time{}
 	w.scroll = 0
 }
 
@@ -170,6 +171,7 @@ func (d *Dashboard) JobFinished(id string, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	w := d.ensureWorker(id)
+	w.finished = time.Now()
 	if err != nil {
 		d.failed++
 		w.status = "failed"
@@ -524,11 +526,15 @@ func elapsedLabel(w *workerState) string {
 	if start.IsZero() {
 		return ""
 	}
-	return "elapsed " + formatDuration(time.Since(start))
+	end := w.finished
+	if end.IsZero() {
+		end = time.Now()
+	}
+	return "elapsed " + formatDuration(end.Sub(start))
 }
 
 func etaLabel(w *workerState) string {
-	if !w.progressKnown || w.progress <= 0 || w.encodingStarted.IsZero() {
+	if !w.progressKnown || w.progress <= 0 || w.encodingStarted.IsZero() || w.progress >= 100 {
 		return ""
 	}
 	elapsed := time.Since(w.encodingStarted)
