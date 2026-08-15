@@ -25,6 +25,7 @@ func main() {
 	flag.BoolVar(&opts.ContinueOnErr, "continue-on-error", true, "Continue processing remaining jobs when a job fails")
 	flag.BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
 	flag.BoolVar(&opts.Verbose, "v", false, "Enable verbose logging (shorthand)")
+	flag.BoolVar(&opts.LocalOnly, "local", false, "Only use the local machine for conversion")
 	poll := flag.Duration("poll-interval", 2*time.Second, "Remote process poll interval")
 	flag.Parse()
 

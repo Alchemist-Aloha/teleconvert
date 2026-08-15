@@ -82,6 +82,7 @@ Flags:
 - `-delete-source`: delete source files when each job succeeds
 - `-continue-on-error`: keep running after per-job failures (default `true`)
 - `-verbose` / `-v`: enable verbose logging
+- `-local`: only use the local machine for conversion (skip SSH nodes)
 - `-poll-interval`: worker monitor interval (default `2s`)
 - `-version`: print the embedded build version and exit
 

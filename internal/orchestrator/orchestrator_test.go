@@ -427,6 +427,31 @@ func (m *mockWorker) MD5(ctx context.Context, path string) (string, error) {
 	return "", nil
 }
 
+func TestBuildSlotsLocalOnlySkipsRemoteNodes(t *testing.T) {
+	cfg := &config.Config{
+		Nodes: []config.Node{
+			{Name: "local-node", Address: "localhost", Command: "ffmpeg -i {{.Input}} {{.Output}}", MaxConcurrent: 1, TmpDir: "/tmp"},
+			{Name: "remote-node", Address: "192.168.1.100:22", User: "user", SSHKey: "/key", Command: "ffmpeg -i {{.Input}} {{.Output}}", MaxConcurrent: 1, TmpDir: "/tmp"},
+		},
+	}
+
+	o := New(Options{LocalOnly: true})
+	o.workerFactory = func(node config.Node, vlog func(string, ...any)) worker.Worker {
+		return &mockWorker{node: node}
+	}
+
+	slots, err := o.buildSlots(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildSlots: %v", err)
+	}
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot with --local, got %d", len(slots))
+	}
+	if slots[0].name != "local-node#0" {
+		t.Errorf("expected local-node#0 slot, got %q", slots[0].name)
+	}
+}
+
 func TestOrchestratorMD5Mismatch(t *testing.T) {
 	tmpdir := t.TempDir()
 	inputPath := filepath.Join(tmpdir, "test.mp4")

@@ -34,6 +34,7 @@ type Options struct {
 	PollInterval  time.Duration
 	ContinueOnErr bool
 	Verbose       bool
+	LocalOnly     bool
 }
 
 type Orchestrator struct {
@@ -431,6 +432,10 @@ func (o *Orchestrator) buildSlots(ctx context.Context, cfg *config.Config) ([]sl
 	all := make([]slot, 0, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
 		o.vlog("checking node %s (%s)", n.Name, n.Address)
+		if o.opts.LocalOnly && !config.IsLocalAddress(n.Address) {
+			o.vlog("skip node %s: --local limits conversion to the local machine", n.Name)
+			continue
+		}
 		var w worker.Worker
 		if config.IsLocalAddress(n.Address) {
 			o.vlog("node %s is local", n.Name)
