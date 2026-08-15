@@ -11,7 +11,7 @@ import (
 	"teleconvert/internal/orchestrator"
 )
 
-var version = "v1.0.1"
+var version = "v1.1.0"
 
 func main() {
 	var opts orchestrator.Options
