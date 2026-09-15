@@ -116,6 +116,22 @@ nodes:
   tmp_dir: "/tmp/teleconvert"
 ```
 
+## Editing nodes from the CLI
+
+```bash
+teleconvert config list
+teleconvert config add -name nas3 -address 10.0.0.5:22 -user likun \
+  -ssh-key ~/.ssh/id_rsa -command 'HandBrakeCLI -i {{.Input}} -o {{.Output}} -O'
+teleconvert config set -name nas3 -max-concurrent 4
+teleconvert config remove -name nas3
+```
+
+Every subcommand accepts `-config PATH` (default `~/.config/teleconvert/teleconvert.yaml`).
+`add` fills in defaults for anything omitted; `set` changes only the flags you
+pass. Edits are validated (unique names, `{{.Input}}`/`{{.Output}}` placeholders)
+and written atomically. Note that the file is rewritten, so YAML comments are
+not preserved and `~` in `ssh_key` is stored expanded.
+
 ## Install
 
 ```bash

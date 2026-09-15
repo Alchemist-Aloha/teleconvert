@@ -14,10 +14,18 @@ import (
 var version = "v1.1.0"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if err := runConfigCmd(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "teleconvert config: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var opts orchestrator.Options
 	showVersion := flag.Bool("version", false, "Print version and exit")
 
-	flag.StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath(), "Path to teleconvert YAML config")
+	flag.StringVar(&opts.ConfigPath, "config", config.DefaultConfigPath(), "Path to teleconvert YAML config (or run 'teleconvert config' to edit)")
 	flag.StringVar(&opts.InputPath, "input", "", "Input file or directory")
 	flag.StringVar(&opts.OutputDir, "output-dir", "", "Output directory (default: converted beside each source file)")
 	flag.StringVar(&opts.OutputExt, "output-ext", ".mp4", "Output extension")

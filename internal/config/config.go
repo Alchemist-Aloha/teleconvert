@@ -54,6 +54,32 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Save validates c and atomically writes it to path.
+func Save(path string, c *Config) error {
+	if path == "" {
+		path = DefaultConfigPath()
+	}
+	path = expandHome(path)
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	b, err := yaml.Dump(c, yaml.WithIndent(2), yaml.WithLineWidth(-1))
+	if err != nil {
+		return fmt.Errorf("encode yaml: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return fmt.Errorf("write config temp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
+}
+
 func (c *Config) Validate() error {
 	if len(c.Nodes) == 0 {
 		return errors.New("config must contain at least one node")
