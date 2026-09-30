@@ -34,7 +34,15 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Cache nfpm
+        id: nfpm-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/nfpm
+          key: nfpm-${{ runner.os }}-${{ runner.arch }}-v2.43.3
+
       - name: Install nfpm
+        if: steps.nfpm-cache.outputs.cache-hit != 'true'
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.3
 
       - name: Build binaries and packages
