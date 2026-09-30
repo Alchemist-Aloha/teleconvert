@@ -1,0 +1,19 @@
+# Package metadata for deb, rpm, and archlinux (pacman) packages.
+# ARCH/VERSION are provided by dist.sh.
+name: teleconvert
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Alchemist-Aloha <Alchemist-Aloha@users.noreply.github.com>
+description: Distribute video conversion jobs across local and SSH workers.
+vendor: teleconvert
+homepage: https://github.com/Alchemist-Aloha/teleconvert
+license: MIT
+
+contents:
+  - src: ./build/teleconvert_linux_${ARCH}/teleconvert
+    dst: /usr/bin/teleconvert
+  - src: ./example-config.yaml
+    dst: /usr/share/teleconvert/example-config.yaml
