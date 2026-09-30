@@ -142,9 +142,44 @@ Installs the binary to `~/.local/bin` and creates a default config if none exist
 Override with `TELECONVERT_INSTALL_DIR`, `TELECONVERT_CONFIG_DIR`, or
 `TELECONVERT_VERSION=v1.2.3`.
 
+### Packages
+
+Every tagged release also ships native packages (linux `amd64`; use `arm64` on
+ARM). Each installs `/usr/bin/teleconvert` and an example config at
+`/usr/share/teleconvert/example-config.yaml`.
+
+Debian / Ubuntu:
+
+```bash
+curl -fLO https://github.com/Alchemist-Aloha/teleconvert/releases/latest/download/teleconvert_linux_amd64.deb
+sudo apt install ./teleconvert_linux_amd64.deb
+```
+
+Fedora / RHEL / openSUSE:
+
+```bash
+sudo dnf install https://github.com/Alchemist-Aloha/teleconvert/releases/latest/download/teleconvert_linux_amd64.rpm
+```
+
+Arch Linux:
+
+```bash
+curl -fLO https://github.com/Alchemist-Aloha/teleconvert/releases/latest/download/teleconvert_linux_amd64.pkg.tar.zst
+sudo pacman -U teleconvert_linux_amd64.pkg.tar.zst
+```
+
+Verify downloads against `checksums.txt` from the same release if you like.
+
 ## Build
 
 ```bash
 go mod tidy
 go build -o teleconvert .
+```
+
+Build binaries and all packages for a version into `dist/`:
+
+```bash
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.3
+./dist.sh v1.2.0
 ```
